@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::ErrorKind,
+    io::{ErrorKind, Write},
     path::{Component, Path},
 };
 
@@ -123,15 +123,18 @@ pub fn create_or_refresh(
             if desired != MaterializationKind::Copy {
                 return replace_with_kind(repo, adapter, desired, dry_run);
             }
+            let permissions_refresh_needed = !target_permissions_match_source(repo, adapter)?;
             if refresh_needed {
                 validate_existing_target_for_write(repo, adapter)?;
             }
             if refresh_needed && !dry_run {
                 write_managed_copy(repo, adapter)?;
+            } else if permissions_refresh_needed && !dry_run {
+                apply_source_permissions(repo, adapter)?;
             }
             Ok(MaterializeOutcome {
                 kind: MaterializationKind::Copy,
-                changed: refresh_needed,
+                changed: refresh_needed || permissions_refresh_needed,
             })
         }
         TargetState::ManagedSymlink { repair_needed } => {
@@ -386,10 +389,115 @@ fn create_hardlink(repo: &GitRepo, adapter: &Adapter) -> Result<()> {
 
 fn write_managed_copy(repo: &GitRepo, adapter: &Adapter) -> Result<()> {
     let target = repo.root.join(&adapter.target);
+    let source = repo.root.join(&adapter.source);
     create_parent_dir(repo, &target)?;
     let bytes = managed_copy_bytes(repo, adapter)?;
-    fs::write(&target, bytes).with_context(|| format!("failed to write {}", target.display()))?;
+    write_with_source_permissions(&source, &target, &bytes)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn write_with_source_permissions(source: &Path, target: &Path, bytes: &[u8]) -> Result<()> {
+    use std::os::unix::{fs::OpenOptionsExt, fs::PermissionsExt};
+
+    let mode = source_mode(source)?;
+    if target.exists() {
+        fs::set_permissions(target, fs::Permissions::from_mode(mode))
+            .with_context(|| format!("failed to set permissions on {}", target.display()))?;
+    }
+
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(mode)
+        .open(target)
+        .with_context(|| format!("failed to write {}", target.display()))?;
+    file.write_all(bytes)
+        .with_context(|| format!("failed to write {}", target.display()))?;
+    file.set_permissions(fs::Permissions::from_mode(mode))
+        .with_context(|| format!("failed to set permissions on {}", target.display()))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_with_source_permissions(source: &Path, target: &Path, bytes: &[u8]) -> Result<()> {
+    fs::write(target, bytes).with_context(|| format!("failed to write {}", target.display()))?;
+    let permissions = fs::metadata(source)
+        .with_context(|| format!("failed to inspect {}", source.display()))?
+        .permissions();
+    fs::set_permissions(target, permissions)
+        .with_context(|| format!("failed to set permissions on {}", target.display()))?;
+    Ok(())
+}
+
+fn apply_source_permissions(repo: &GitRepo, adapter: &Adapter) -> Result<()> {
+    let source = repo.root.join(&adapter.source);
+    let target = repo.root.join(&adapter.target);
+    apply_permissions(&source, &target)
+}
+
+#[cfg(unix)]
+fn apply_permissions(source: &Path, target: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(target, fs::Permissions::from_mode(source_mode(source)?))
+        .with_context(|| format!("failed to set permissions on {}", target.display()))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn apply_permissions(source: &Path, target: &Path) -> Result<()> {
+    let permissions = fs::metadata(source)
+        .with_context(|| format!("failed to inspect {}", source.display()))?
+        .permissions();
+    fs::set_permissions(target, permissions)
+        .with_context(|| format!("failed to set permissions on {}", target.display()))?;
+    Ok(())
+}
+
+fn target_permissions_match_source(repo: &GitRepo, adapter: &Adapter) -> Result<bool> {
+    let source = repo.root.join(&adapter.source);
+    let target = repo.root.join(&adapter.target);
+    permissions_match(&source, &target)
+}
+
+#[cfg(unix)]
+fn permissions_match(source: &Path, target: &Path) -> Result<bool> {
+    Ok(source_mode(source)? == target_mode(target)?)
+}
+
+#[cfg(not(unix))]
+fn permissions_match(source: &Path, target: &Path) -> Result<bool> {
+    let source = fs::metadata(source)
+        .with_context(|| format!("failed to inspect {}", source.display()))?
+        .permissions();
+    let target = fs::metadata(target)
+        .with_context(|| format!("failed to inspect {}", target.display()))?
+        .permissions();
+    Ok(source.readonly() == target.readonly())
+}
+
+#[cfg(unix)]
+fn source_mode(source: &Path) -> Result<u32> {
+    use std::os::unix::fs::PermissionsExt;
+
+    Ok(fs::metadata(source)
+        .with_context(|| format!("failed to inspect {}", source.display()))?
+        .permissions()
+        .mode()
+        & 0o7777)
+}
+
+#[cfg(unix)]
+fn target_mode(target: &Path) -> Result<u32> {
+    use std::os::unix::fs::PermissionsExt;
+
+    Ok(fs::metadata(target)
+        .with_context(|| format!("failed to inspect {}", target.display()))?
+        .permissions()
+        .mode()
+        & 0o7777)
 }
 
 fn validate_existing_target_for_write(repo: &GitRepo, adapter: &Adapter) -> Result<()> {

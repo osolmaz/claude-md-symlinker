@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     path::{Component, Path, PathBuf},
     sync::mpsc,
     thread,
@@ -10,30 +11,29 @@ use notify::{Config as NotifyConfig, Event, RecommendedWatcher, RecursiveMode, W
 
 use crate::{
     adapters::{self, Adapter},
-    config::{AppConfig, ScanScope},
+    config::{self, AppConfig, LoadedConfig, ScanScope},
     reconciler::{self, ReconcileOptions},
     reporting::print_plain,
     state::State,
 };
 
-pub fn run(
-    config: &AppConfig,
+type WatchTargets = BTreeMap<PathBuf, RecursiveMode>;
+
+struct ActiveConfig {
+    config: AppConfig,
     config_existed: bool,
+    scope: ScanScope,
+    adapters: Vec<Adapter>,
+}
+
+pub fn run(
+    loaded: LoadedConfig,
     cli_roots: &[PathBuf],
     state: &State,
     dry_run: bool,
-    config_path: &Path,
 ) -> Result<()> {
-    let scope = config.scan_scope(config_existed, cli_roots)?;
-    let adapters = adapters::enabled_adapters(config)?;
-    let initial = reconciler::apply(
-        config,
-        config_existed,
-        cli_roots,
-        state,
-        ReconcileOptions { dry_run },
-    )?;
-    print_plain(&initial, dry_run);
+    let config_path = loaded.path.clone();
+    let mut active = active_config(loaded, cli_roots)?;
 
     let (tx, rx) = mpsc::channel();
     let mut watcher = RecommendedWatcher::new(
@@ -44,16 +44,19 @@ pub fn run(
     )
     .context("failed to create filesystem watcher")?;
 
-    for root in &scope.roots {
-        watcher
-            .watch(root, RecursiveMode::Recursive)
-            .with_context(|| format!("failed to watch {}", root.display()))?;
-    }
+    let mut watched = WatchTargets::new();
+    sync_watches(
+        &mut watcher,
+        &mut watched,
+        desired_watch_targets(&active.scope, &config_path),
+    )?;
+
+    run_once(&active, cli_roots, state, dry_run)?;
 
     let event_poll_interval =
-        Duration::from_secs(config.watch.reconcile_interval_minutes.max(1) * 60);
+        Duration::from_secs(active.config.watch.reconcile_interval_minutes.max(1) * 60);
     let full_rescan_interval =
-        Duration::from_secs(config.watch.full_rescan_interval_hours.max(1) * 60 * 60);
+        Duration::from_secs(active.config.watch.full_rescan_interval_hours.max(1) * 60 * 60);
     let debounce = Duration::from_millis(500);
     let mut last_run = Instant::now();
 
@@ -65,18 +68,33 @@ pub fn run(
 
         match rx.recv_timeout(timeout) {
             Ok(Ok(event)) => {
-                let mut should_run = event_is_relevant(&event, &scope, &adapters, config_path);
+                let mut should_run =
+                    event_is_relevant(&event, &active.scope, &active.adapters, &config_path);
                 thread::sleep(debounce);
                 while let Ok(result) = rx.try_recv() {
                     match result {
                         Ok(event) => {
-                            should_run |= event_is_relevant(&event, &scope, &adapters, config_path);
+                            should_run |= event_is_relevant(
+                                &event,
+                                &active.scope,
+                                &active.adapters,
+                                &config_path,
+                            );
                         }
                         Err(error) => tracing::warn!("watch error: {error}"),
                     }
                 }
-                if should_run {
-                    run_once(config, config_existed, cli_roots, state, dry_run)?;
+                if should_run
+                    && reload_and_run(
+                        &mut active,
+                        &mut watcher,
+                        &mut watched,
+                        &config_path,
+                        cli_roots,
+                        state,
+                        dry_run,
+                    )?
+                {
                     last_run = Instant::now();
                 }
             }
@@ -84,8 +102,17 @@ pub fn run(
                 tracing::warn!("watch error: {error}");
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if last_run.elapsed() >= full_rescan_interval {
-                    run_once(config, config_existed, cli_roots, state, dry_run)?;
+                if last_run.elapsed() >= full_rescan_interval
+                    && reload_and_run(
+                        &mut active,
+                        &mut watcher,
+                        &mut watched,
+                        &config_path,
+                        cli_roots,
+                        state,
+                        dry_run,
+                    )?
+                {
                     last_run = Instant::now();
                 }
             }
@@ -96,22 +123,114 @@ pub fn run(
     }
 }
 
+fn reload_and_run(
+    active: &mut ActiveConfig,
+    watcher: &mut RecommendedWatcher,
+    watched: &mut WatchTargets,
+    config_path: &Path,
+    cli_roots: &[PathBuf],
+    state: &State,
+    dry_run: bool,
+) -> Result<bool> {
+    let next = match reload_active_config(config_path, cli_roots) {
+        Ok(active) => active,
+        Err(error) => {
+            tracing::warn!("failed to reload config; skipping reconcile: {error:#}");
+            return Ok(false);
+        }
+    };
+    sync_watches(
+        watcher,
+        watched,
+        desired_watch_targets(&next.scope, config_path),
+    )?;
+    *active = next;
+    run_once(active, cli_roots, state, dry_run)?;
+    Ok(true)
+}
+
 fn run_once(
-    config: &AppConfig,
-    config_existed: bool,
+    active: &ActiveConfig,
     cli_roots: &[PathBuf],
     state: &State,
     dry_run: bool,
 ) -> Result<()> {
     let report = reconciler::apply(
-        config,
-        config_existed,
+        &active.config,
+        active.config_existed,
         cli_roots,
         state,
         ReconcileOptions { dry_run },
     )?;
     print_plain(&report, dry_run);
     Ok(())
+}
+
+fn active_config(loaded: LoadedConfig, cli_roots: &[PathBuf]) -> Result<ActiveConfig> {
+    let scope = loaded.config.scan_scope(loaded.existed, cli_roots)?;
+    let adapters = adapters::enabled_adapters(&loaded.config)?;
+    Ok(ActiveConfig {
+        config: loaded.config,
+        config_existed: loaded.existed,
+        scope,
+        adapters,
+    })
+}
+
+fn reload_active_config(config_path: &Path, cli_roots: &[PathBuf]) -> Result<ActiveConfig> {
+    active_config(config::load(Some(config_path))?, cli_roots)
+}
+
+fn sync_watches(
+    watcher: &mut RecommendedWatcher,
+    current: &mut WatchTargets,
+    desired: WatchTargets,
+) -> Result<()> {
+    let removals = current
+        .iter()
+        .filter(|(path, mode)| desired.get(*path) != Some(*mode))
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
+    for path in removals {
+        if let Err(error) = watcher.unwatch(&path) {
+            tracing::warn!("failed to unwatch {}: {error}", path.display());
+        }
+        current.remove(&path);
+    }
+
+    for (path, mode) in desired {
+        if current.get(&path) == Some(&mode) {
+            continue;
+        }
+        watcher
+            .watch(&path, mode)
+            .with_context(|| format!("failed to watch {}", path.display()))?;
+        current.insert(path, mode);
+    }
+
+    Ok(())
+}
+
+fn desired_watch_targets(scope: &ScanScope, config_path: &Path) -> WatchTargets {
+    let mut targets = WatchTargets::new();
+    for root in &scope.roots {
+        insert_watch_target(&mut targets, root.clone(), RecursiveMode::Recursive);
+    }
+    if let Some(parent) = config_path.parent().filter(|parent| parent.exists()) {
+        insert_watch_target(
+            &mut targets,
+            parent.to_path_buf(),
+            RecursiveMode::NonRecursive,
+        );
+    }
+    targets
+}
+
+fn insert_watch_target(targets: &mut WatchTargets, path: PathBuf, mode: RecursiveMode) {
+    if targets.get(&path) == Some(&RecursiveMode::Recursive) {
+        return;
+    }
+    targets.insert(path, mode);
 }
 
 fn event_is_relevant(
@@ -132,7 +251,7 @@ fn path_is_relevant(
     adapters: &[Adapter],
     config_path: &Path,
 ) -> bool {
-    if path == config_path {
+    if path == config_path || config_path.parent().is_some_and(|parent| path == parent) {
         return true;
     }
 
@@ -187,9 +306,9 @@ fn has_excluded_dir_component(path: &Path, scope: &ScanScope) -> bool {
 mod tests {
     use std::{collections::BTreeSet, path::PathBuf};
 
-    use notify::{Event, EventKind, event::EventAttributes};
+    use notify::{Event, EventKind, RecursiveMode, event::EventAttributes};
 
-    use super::event_is_relevant;
+    use super::{desired_watch_targets, event_is_relevant};
     use crate::{
         adapters::Adapter,
         config::{ScanScope, SourceMissingBehavior},
@@ -222,6 +341,12 @@ mod tests {
         ));
         assert!(event_is_relevant(
             &event(config_path.clone()),
+            &scope,
+            &adapters,
+            &config_path
+        ));
+        assert!(event_is_relevant(
+            &event(config_path.parent().unwrap().to_path_buf()),
             &scope,
             &adapters,
             &config_path
@@ -274,6 +399,22 @@ mod tests {
             &adapters,
             &config_path
         ));
+    }
+
+    #[test]
+    fn watch_targets_include_roots_and_config_parent() {
+        let root = PathBuf::from("/workspace");
+        let scope = scope(root.clone());
+        let config_dir = tempfile::tempdir().unwrap();
+        let config_path = config_dir.path().join("claudectomy.toml");
+
+        let targets = desired_watch_targets(&scope, &config_path);
+
+        assert_eq!(targets.get(&root), Some(&RecursiveMode::Recursive));
+        assert_eq!(
+            targets.get(config_dir.path()),
+            Some(&RecursiveMode::NonRecursive)
+        );
     }
 
     fn scope(root: PathBuf) -> ScanScope {

@@ -801,6 +801,54 @@ fn copy_materialization_refreshes_managed_copy() {
 
 #[cfg(unix)]
 #[test]
+fn copy_materialization_preserves_source_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "private instructions\n").unwrap();
+    fs::set_permissions(repo.join("AGENTS.md"), fs::Permissions::from_mode(0o600)).unwrap();
+    let mut config = fixture.config();
+    config.materialization.strategy = MaterializationStrategy::Copy;
+    let state = fixture.state();
+
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    let target_mode = fs::metadata(repo.join("CLAUDE.md"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(target_mode, 0o600);
+
+    fs::set_permissions(repo.join("AGENTS.md"), fs::Permissions::from_mode(0o640)).unwrap();
+    let report = reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.refreshed, 1);
+    let target_mode = fs::metadata(repo.join("CLAUDE.md"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(target_mode, 0o640);
+}
+
+#[cfg(unix)]
+#[test]
 fn dry_run_copy_refresh_rejects_unwritable_target() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -2062,6 +2110,49 @@ fn clean_without_remove_flag_preserves_missing_managed_shim_ownership() {
 }
 
 #[test]
+fn watch_reloads_config_and_updates_watched_roots() {
+    let fixture = Fixture::new();
+    let first_repo = fixture.repo("first");
+    let second_repo = fixture.repo("second");
+    fs::write(first_repo.join("AGENTS.md"), "first\n").unwrap();
+    fs::write(second_repo.join("AGENTS.md"), "second\n").unwrap();
+    let config_path = fixture.root.path().join("watch-config.toml");
+    write_config_roots(&config_path, &[&first_repo]);
+    let bin = env!("CARGO_BIN_EXE_claudectomy");
+
+    let mut child = Command::new(bin)
+        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .args(["--config", config_path.to_str().unwrap(), "watch"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("watch starts");
+
+    assert!(
+        wait_until(Duration::from_secs(5), || first_repo
+            .join("CLAUDE.md")
+            .exists()),
+        "initial watched repo was not reconciled"
+    );
+
+    write_config_roots(&config_path, &[&second_repo]);
+    assert!(
+        wait_until(Duration::from_secs(5), || second_repo
+            .join("CLAUDE.md")
+            .exists()),
+        "updated watched repo was not reconciled"
+    );
+
+    fs::remove_file(first_repo.join("CLAUDE.md")).unwrap();
+    fs::write(first_repo.join("AGENTS.md"), "first changed\n").unwrap();
+    thread::sleep(Duration::from_secs(1));
+    assert!(!first_repo.join("CLAUDE.md").exists());
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
 fn clean_invalid_exclude_leaves_managed_target_in_place() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
@@ -2453,6 +2544,26 @@ fn wait_with_timeout(
     let _ = child.kill();
     let _ = child.wait();
     None
+}
+
+fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        if condition() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+fn write_config_roots(path: &Path, roots: &[&Path]) {
+    let roots = roots
+        .iter()
+        .map(|root| format!("\"{}\"", root.display()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    fs::write(path, format!("[scan]\nroots = [{roots}]\n")).unwrap();
 }
 
 fn path_from_git_output(repo: &Path, text: &str) -> PathBuf {
