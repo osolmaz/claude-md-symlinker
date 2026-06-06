@@ -1,6 +1,7 @@
 # Claudectomy Implementation Plan
 
-Status: initial implementation in progress.
+Status: initial implementation complete and merged. Packaging follow-ups remain
+deferred until command behavior is stable.
 
 ## Goal
 
