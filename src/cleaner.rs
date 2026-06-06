@@ -70,7 +70,7 @@ fn clean_adapter(
     options: CleanOptions,
     shared_exclude: bool,
 ) -> Result<(RepoResult, bool)> {
-    let source_exists = repo.root.join(&adapter.source).exists();
+    let source_exists = materializer::source_exists(repo, adapter)?;
     let mut target_state = materializer::classify(repo, adapter)?;
     let stored_kind = stored_managed_kind(repo, adapter, state)?;
     if matches!(target_state, TargetState::ManagedHardlink)

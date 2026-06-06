@@ -1,5 +1,6 @@
 use std::{
     fs,
+    fs::Metadata,
     io::{ErrorKind, Write},
     path::{Component, Path},
 };
@@ -192,8 +193,32 @@ pub fn source_hash(repo: &GitRepo, adapter: &Adapter) -> Result<Option<String>> 
     file_hash(&repo.root.join(&adapter.source))
 }
 
+pub fn source_exists(repo: &GitRepo, adapter: &Adapter) -> Result<bool> {
+    regular_file_exists(&repo.root.join(&adapter.source))
+}
+
 fn file_hash(path: &Path) -> Result<Option<String>> {
-    let metadata = match fs::metadata(path) {
+    let Some(_metadata) = source_metadata(path)? else {
+        return Ok(None);
+    };
+
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    Ok(Some(format!("{:x}", hasher.finalize())))
+}
+
+fn regular_file_exists(path: &Path) -> Result<bool> {
+    Ok(source_metadata(path)?.is_some())
+}
+
+fn required_source_metadata(path: &Path) -> Result<Metadata> {
+    source_metadata(path)?
+        .with_context(|| format!("source file does not exist: {}", path.display()))
+}
+
+fn source_metadata(path: &Path) -> Result<Option<Metadata>> {
+    let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(error) => {
@@ -203,19 +228,7 @@ fn file_hash(path: &Path) -> Result<Option<String>> {
     if !metadata.is_file() {
         bail!("{} is not a regular file", path.display());
     }
-
-    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    Ok(Some(format!("{:x}", hasher.finalize())))
-}
-
-fn regular_file_exists(path: &Path) -> Result<bool> {
-    match fs::metadata(path) {
-        Ok(metadata) => Ok(metadata.is_file()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error).with_context(|| format!("failed to inspect {}", path.display())),
-    }
+    Ok(Some(metadata))
 }
 
 pub fn managed_copy_header(adapter: &Adapter) -> String {
@@ -401,8 +414,9 @@ fn write_with_source_permissions(source: &Path, target: &Path, bytes: &[u8]) -> 
     use std::os::unix::{fs::OpenOptionsExt, fs::PermissionsExt};
 
     let mode = source_mode(source)?;
+    let write_mode = mode | 0o200;
     if target.exists() {
-        fs::set_permissions(target, fs::Permissions::from_mode(mode))
+        fs::set_permissions(target, fs::Permissions::from_mode(write_mode))
             .with_context(|| format!("failed to set permissions on {}", target.display()))?;
     }
 
@@ -410,7 +424,7 @@ fn write_with_source_permissions(source: &Path, target: &Path, bytes: &[u8]) -> 
         .create(true)
         .truncate(true)
         .write(true)
-        .mode(mode)
+        .mode(write_mode)
         .open(target)
         .with_context(|| format!("failed to write {}", target.display()))?;
     file.write_all(bytes)
@@ -422,10 +436,14 @@ fn write_with_source_permissions(source: &Path, target: &Path, bytes: &[u8]) -> 
 
 #[cfg(not(unix))]
 fn write_with_source_permissions(source: &Path, target: &Path, bytes: &[u8]) -> Result<()> {
+    let permissions = required_source_metadata(source)?.permissions();
+    if target.exists() {
+        let mut write_permissions = permissions.clone();
+        write_permissions.set_readonly(false);
+        fs::set_permissions(target, write_permissions)
+            .with_context(|| format!("failed to set permissions on {}", target.display()))?;
+    }
     fs::write(target, bytes).with_context(|| format!("failed to write {}", target.display()))?;
-    let permissions = fs::metadata(source)
-        .with_context(|| format!("failed to inspect {}", source.display()))?
-        .permissions();
     fs::set_permissions(target, permissions)
         .with_context(|| format!("failed to set permissions on {}", target.display()))?;
     Ok(())
@@ -448,9 +466,7 @@ fn apply_permissions(source: &Path, target: &Path) -> Result<()> {
 
 #[cfg(not(unix))]
 fn apply_permissions(source: &Path, target: &Path) -> Result<()> {
-    let permissions = fs::metadata(source)
-        .with_context(|| format!("failed to inspect {}", source.display()))?
-        .permissions();
+    let permissions = required_source_metadata(source)?.permissions();
     fs::set_permissions(target, permissions)
         .with_context(|| format!("failed to set permissions on {}", target.display()))?;
     Ok(())
@@ -469,9 +485,7 @@ fn permissions_match(source: &Path, target: &Path) -> Result<bool> {
 
 #[cfg(not(unix))]
 fn permissions_match(source: &Path, target: &Path) -> Result<bool> {
-    let source = fs::metadata(source)
-        .with_context(|| format!("failed to inspect {}", source.display()))?
-        .permissions();
+    let source = required_source_metadata(source)?.permissions();
     let target = fs::metadata(target)
         .with_context(|| format!("failed to inspect {}", target.display()))?
         .permissions();
@@ -482,11 +496,7 @@ fn permissions_match(source: &Path, target: &Path) -> Result<bool> {
 fn source_mode(source: &Path) -> Result<u32> {
     use std::os::unix::fs::PermissionsExt;
 
-    Ok(fs::metadata(source)
-        .with_context(|| format!("failed to inspect {}", source.display()))?
-        .permissions()
-        .mode()
-        & 0o7777)
+    Ok(required_source_metadata(source)?.permissions().mode() & 0o7777)
 }
 
 #[cfg(unix)]
@@ -508,14 +518,12 @@ fn validate_existing_target_for_write(repo: &GitRepo, adapter: &Adapter) -> Resu
     if !metadata.is_file() {
         bail!("target {} is not a regular file", target.display());
     }
-    if metadata.permissions().readonly() {
-        bail!("target {} is not writable", target.display());
-    }
     Ok(())
 }
 
 fn managed_copy_bytes(repo: &GitRepo, adapter: &Adapter) -> Result<Vec<u8>> {
     let source = repo.root.join(&adapter.source);
+    required_source_metadata(&source)?;
     let mut bytes = managed_copy_header(adapter).into_bytes();
     bytes.push(b'\n');
     bytes

@@ -283,16 +283,25 @@ pub fn save(path_override: Option<&Path>, config: &AppConfig) -> Result<PathBuf>
 
 pub fn config_path(path_override: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = path_override {
-        return Ok(expand_tilde(path));
+        return absolute_expanded_path(path);
     }
 
     if let Ok(path) = env::var("CLAUDECTOMY_CONFIG") {
-        return Ok(expand_tilde(Path::new(&path)));
+        return absolute_expanded_path(Path::new(&path));
     }
 
     let dirs = ProjectDirs::from("dev", "dutiful", "claudectomy")
         .context("could not determine platform config directory")?;
     Ok(dirs.config_dir().join("claudectomy.toml"))
+}
+
+fn absolute_expanded_path(path: &Path) -> Result<PathBuf> {
+    let expanded = expand_tilde(path);
+    if expanded.is_absolute() {
+        Ok(expanded)
+    } else {
+        Ok(env::current_dir()?.join(expanded))
+    }
 }
 
 pub fn data_dir() -> Result<PathBuf> {

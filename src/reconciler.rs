@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -77,10 +77,9 @@ fn reconcile_adapter(
     options: ReconcileOptions,
     shared_exclude: bool,
 ) -> Result<(RepoResult, bool)> {
-    let source = repo.root.join(&adapter.source);
     let target = repo.root.join(&adapter.target);
 
-    if !source.exists() {
+    if !materializer::source_exists(repo, adapter)? {
         let target_state = materializer::classify(repo, adapter)?;
         let stored_kind = stored_managed_kind(repo, adapter, state)?;
         let stored_missing_kind = if matches!(target_state, TargetState::Missing) {
@@ -273,7 +272,10 @@ fn reconcile_adapter(
                 options.dry_run,
             )
             .inspect_err(|_| {
-                if (exclude_updated || target_was_missing) && !options.dry_run {
+                if target_was_missing
+                    && !options.dry_run
+                    && fs::symlink_metadata(repo.root.join(&adapter.target)).is_err()
+                {
                     let _ = exclude::remove(
                         repo,
                         &adapter.target,

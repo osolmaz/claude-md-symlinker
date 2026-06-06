@@ -745,6 +745,32 @@ fn non_file_source_is_rejected_before_creating_shim() {
     assert!(!exclude_text.lines().any(|line| line == "/CLAUDE.md"));
 }
 
+#[cfg(unix)]
+#[test]
+fn symlinked_source_is_rejected_before_creating_shim() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("secret"), "outside secret\n").unwrap();
+    std::os::unix::fs::symlink(outside.path().join("secret"), repo.join("AGENTS.md")).unwrap();
+    let mut config = fixture.config();
+    config.materialization.strategy = MaterializationStrategy::Copy;
+
+    let report = reconciler::apply(
+        &config,
+        false,
+        &[],
+        &fixture.state(),
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.errors, 1);
+    assert!(!repo.join("CLAUDE.md").exists());
+    let exclude_text = fs::read_to_string(git_exclude_path(&repo)).unwrap_or_default();
+    assert!(!exclude_text.lines().any(|line| line == "/CLAUDE.md"));
+}
+
 #[test]
 fn dry_run_reports_without_mutating_repo_or_state() {
     let fixture = Fixture::new();
@@ -845,11 +871,35 @@ fn copy_materialization_preserves_source_permissions() {
         .mode()
         & 0o777;
     assert_eq!(target_mode, 0o640);
+
+    fs::write(repo.join("AGENTS.md"), "read-only instructions\n").unwrap();
+    fs::set_permissions(repo.join("AGENTS.md"), fs::Permissions::from_mode(0o444)).unwrap();
+    let report = reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.refreshed, 1);
+    let target_mode = fs::metadata(repo.join("CLAUDE.md"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(target_mode, 0o444);
+    assert!(
+        fs::read_to_string(repo.join("CLAUDE.md"))
+            .unwrap()
+            .ends_with("read-only instructions\n")
+    );
 }
 
 #[cfg(unix)]
 #[test]
-fn dry_run_copy_refresh_rejects_unwritable_target() {
+fn dry_run_copy_refresh_reports_readonly_target_refresh() {
     use std::os::unix::fs::PermissionsExt;
 
     let fixture = Fixture::new();
@@ -880,8 +930,13 @@ fn dry_run_copy_refresh_rejects_unwritable_target() {
 
     fs::set_permissions(repo.join("CLAUDE.md"), fs::Permissions::from_mode(0o644)).unwrap();
     let report = report.unwrap();
-    assert_eq!(report.summary.errors, 1);
-    assert_eq!(report.summary.refreshed, 0);
+    assert_eq!(report.summary.errors, 0);
+    assert_eq!(report.summary.refreshed, 1);
+    assert!(
+        fs::read_to_string(repo.join("CLAUDE.md"))
+            .unwrap()
+            .ends_with("v1\n")
+    );
 }
 
 #[cfg(unix)]
@@ -1225,6 +1280,48 @@ fn failed_recreate_of_missing_target_removes_stale_exclude() {
 
     fs::write(repo.join("CLAUDE.md"), "user-owned replacement\n").unwrap();
     assert_eq!(git_status(&repo, "CLAUDE.md"), "?? CLAUDE.md\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_refresh_of_existing_managed_target_keeps_exclude() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "v1\n").unwrap();
+    let mut config = fixture.config();
+    config.materialization.strategy = MaterializationStrategy::Copy;
+    let state = fixture.state();
+
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+    let exclude_path = git_exclude_path(&repo);
+    fs::write(&exclude_path, "").unwrap();
+    fs::write(repo.join("AGENTS.md"), "v2\n").unwrap();
+    let original_permissions = fs::metadata(&repo).unwrap().permissions();
+    fs::set_permissions(&repo, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let report = reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    );
+
+    fs::set_permissions(&repo, original_permissions).unwrap();
+    let report = report.unwrap();
+    assert_eq!(report.summary.errors, 1);
+    assert!(repo.join("CLAUDE.md").exists());
+    let exclude_text = fs::read_to_string(exclude_path).unwrap();
+    assert!(exclude_text.lines().any(|line| line == "/CLAUDE.md"));
 }
 
 #[test]
@@ -2122,7 +2219,8 @@ fn watch_reloads_config_and_updates_watched_roots() {
 
     let mut child = Command::new(bin)
         .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
-        .args(["--config", config_path.to_str().unwrap(), "watch"])
+        .current_dir(fixture.root.path())
+        .args(["--config", "watch-config.toml", "watch"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
