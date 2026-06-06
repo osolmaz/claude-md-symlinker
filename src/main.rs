@@ -122,7 +122,7 @@ fn run() -> Result<u8> {
 
 fn command_state(dry_run: bool) -> Result<State> {
     if dry_run {
-        Ok(State::disabled())
+        State::open_default_read_only_if_exists()
     } else {
         State::open_default()
     }

@@ -310,7 +310,10 @@ fn symlink_points_to(target: &Path, source: &Path) -> Result<bool> {
         return Ok(true);
     }
 
-    Ok(resolved.canonicalize().ok() == source.canonicalize().ok())
+    match (resolved.canonicalize(), source.canonicalize()) {
+        (Ok(resolved), Ok(source)) => Ok(resolved == source),
+        _ => Ok(false),
+    }
 }
 
 fn create_parent_dir(path: &Path) -> Result<()> {

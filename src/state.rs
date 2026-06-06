@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OpenFlags, params};
 
 use crate::{config, git::GitRepo, materializer::MaterializationKind, reporting::Status};
 
@@ -31,6 +31,10 @@ impl State {
         Self::open(config::data_dir()?)
     }
 
+    pub fn open_default_read_only_if_exists() -> Result<Self> {
+        Self::open_read_only_if_exists(config::data_dir()?)
+    }
+
     pub fn open(data_dir: PathBuf) -> Result<Self> {
         fs::create_dir_all(&data_dir)
             .with_context(|| format!("failed to create data dir {}", data_dir.display()))?;
@@ -40,6 +44,17 @@ impl State {
         let state = Self { conn: Some(conn) };
         state.migrate()?;
         Ok(state)
+    }
+
+    pub fn open_read_only_if_exists(data_dir: PathBuf) -> Result<Self> {
+        let db_path = data_dir.join("state.sqlite3");
+        if !db_path.exists() {
+            return Ok(Self::disabled());
+        }
+
+        let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("failed to open state db {}", db_path.display()))?;
+        Ok(Self { conn: Some(conn) })
     }
 
     pub fn disabled() -> Self {

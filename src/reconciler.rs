@@ -82,8 +82,10 @@ fn reconcile_adapter(
 
     if !source.exists() {
         let target_state = materializer::classify(repo, adapter)?;
-        let managed_target =
-            target_is_managed(&target_state) || stored_hardlink_matches(repo, adapter, state)?;
+        let stored_hardlink_matches = stored_hardlink_matches(repo, adapter, state)?;
+        let managed_kind = target_managed_kind(&target_state)
+            .or_else(|| stored_hardlink_matches.then_some(MaterializationKind::Hardlink));
+        let managed_target = managed_kind.is_some();
         let stale_missing_managed_target = matches!(target_state, TargetState::Missing)
             && stored_managed_shim_exists(repo, adapter, state)?
             && !shared_exclude;
@@ -148,7 +150,19 @@ fn reconcile_adapter(
                 };
                 let result = result_for(repo, adapter, status, message);
                 if !options.dry_run {
-                    record(state, repo, adapter, None, result.status, &result.message)?;
+                    let materialization = if result.status == Status::Kept {
+                        managed_kind
+                    } else {
+                        None
+                    };
+                    record(
+                        state,
+                        repo,
+                        adapter,
+                        materialization,
+                        result.status,
+                        &result.message,
+                    )?;
                 }
                 return Ok((result, exclude_updated));
             }
@@ -185,7 +199,7 @@ fn reconcile_adapter(
                 state,
                 repo,
                 adapter,
-                None,
+                managed_kind,
                 Status::NoSource,
                 &result.message,
             )?;
@@ -391,13 +405,13 @@ fn exclude_path_counts(repos: &[GitRepo]) -> BTreeMap<PathBuf, usize> {
     counts
 }
 
-fn target_is_managed(target_state: &TargetState) -> bool {
-    matches!(
-        target_state,
-        TargetState::ManagedSymlink { .. }
-            | TargetState::ManagedCopy { .. }
-            | TargetState::ManagedHardlink
-    )
+fn target_managed_kind(target_state: &TargetState) -> Option<MaterializationKind> {
+    Some(match target_state {
+        TargetState::ManagedSymlink { .. } => MaterializationKind::Symlink,
+        TargetState::ManagedCopy { .. } => MaterializationKind::Copy,
+        TargetState::ManagedHardlink => MaterializationKind::Hardlink,
+        _ => return None,
+    })
 }
 
 fn status_for(previous_state: TargetState, changed: bool) -> Status {
@@ -432,13 +446,20 @@ fn record(
     status: Status,
     message: &str,
 ) -> Result<()> {
+    let content_hash = match materialization {
+        Some(MaterializationKind::Hardlink) if !repo.root.join(&adapter.source).exists() => {
+            materializer::target_hash(repo, adapter)?
+        }
+        _ => materializer::source_hash(repo, adapter)?,
+    };
+
     state.record(ShimRecord {
         repo,
         adapter_name: &adapter.name,
         source_rel_path: &adapter.source.to_string_lossy(),
         target_rel_path: &adapter.target.to_string_lossy(),
         materialization,
-        content_hash: materializer::source_hash(repo, adapter)?,
+        content_hash,
         status,
         message,
     })

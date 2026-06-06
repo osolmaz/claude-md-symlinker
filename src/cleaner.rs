@@ -7,7 +7,7 @@ use crate::{
     config::{AppConfig, ExcludeMode},
     discovery,
     git::{self, GitRepo},
-    materializer::{self, TargetState},
+    materializer::{self, MaterializationKind, TargetState},
     reporting::{RepoResult, Report, Status},
     state::{ShimRecord, State},
 };
@@ -72,17 +72,55 @@ fn clean_adapter(
 ) -> Result<(RepoResult, bool)> {
     let source_exists = repo.root.join(&adapter.source).exists();
     let target_state = materializer::classify(repo, adapter)?;
+    let unmanaged_target_exists = matches!(
+        target_state,
+        TargetState::UnknownRegularFile | TargetState::UnknownSymlink | TargetState::Other
+    );
     let stale_missing_managed_target = matches!(target_state, TargetState::Missing)
         && stored_managed_shim_exists(repo, adapter, state)?
         && !shared_exclude;
-    let managed = target_is_managed(&target_state)
-        || stored_hardlink_matches(repo, adapter, state)?
-        || stale_missing_managed_target;
+    let stored_hardlink_matches = stored_hardlink_matches(repo, adapter, state)?;
+    let managed_kind = target_managed_kind(&target_state)
+        .or_else(|| stored_hardlink_matches.then_some(MaterializationKind::Hardlink));
+    let managed = managed_kind.is_some() || stale_missing_managed_target;
+
+    if !source_exists && unmanaged_target_exists && managed_kind.is_none() {
+        let exclude_updated =
+            crate::exclude::remove(repo, &adapter.target, exclude_mode, options.dry_run)?;
+        let result = result_for(
+            repo,
+            adapter,
+            Status::NoSource,
+            if exclude_updated {
+                "source file does not exist; target is not managed; Git exclude removed"
+            } else {
+                "source file does not exist; target is not managed"
+            },
+        );
+        if !options.dry_run {
+            record(
+                state,
+                repo,
+                adapter,
+                None,
+                Status::NoSource,
+                &result.message,
+            )?;
+        }
+        return Ok((result, exclude_updated));
+    }
 
     if source_exists || !managed {
         let result = result_for(repo, adapter, Status::Kept, "nothing to clean");
         if !options.dry_run {
-            record(state, repo, adapter, Status::Kept, &result.message)?;
+            record(
+                state,
+                repo,
+                adapter,
+                managed_kind,
+                Status::Kept,
+                &result.message,
+            )?;
         }
         return Ok((result, false));
     }
@@ -95,7 +133,14 @@ fn clean_adapter(
             "managed shim is stale; pass --remove-if-source-missing to remove it",
         );
         if !options.dry_run {
-            record(state, repo, adapter, Status::NoSource, &result.message)?;
+            record(
+                state,
+                repo,
+                adapter,
+                managed_kind,
+                Status::NoSource,
+                &result.message,
+            )?;
         }
         return Ok((result, false));
     }
@@ -112,6 +157,7 @@ fn clean_adapter(
                 state,
                 repo,
                 adapter,
+                None,
                 Status::TrackedConflict,
                 &result.message,
             )?;
@@ -145,7 +191,19 @@ fn clean_adapter(
         result_for(repo, adapter, Status::Kept, "nothing to clean")
     };
     if !options.dry_run {
-        record(state, repo, adapter, result.status, &result.message)?;
+        let materialization = if result.status == Status::Kept {
+            managed_kind
+        } else {
+            None
+        };
+        record(
+            state,
+            repo,
+            adapter,
+            materialization,
+            result.status,
+            &result.message,
+        )?;
     }
     Ok((result, exclude_updated))
 }
@@ -154,28 +212,36 @@ fn record(
     state: &State,
     repo: &GitRepo,
     adapter: &Adapter,
+    materialization: Option<MaterializationKind>,
     status: Status,
     message: &str,
 ) -> Result<()> {
+    let content_hash = match materialization {
+        Some(MaterializationKind::Hardlink) if !repo.root.join(&adapter.source).exists() => {
+            materializer::target_hash(repo, adapter)?
+        }
+        _ => materializer::source_hash(repo, adapter)?,
+    };
+
     state.record(ShimRecord {
         repo,
         adapter_name: &adapter.name,
         source_rel_path: &adapter.source.to_string_lossy(),
         target_rel_path: &adapter.target.to_string_lossy(),
-        materialization: None,
-        content_hash: materializer::source_hash(repo, adapter)?,
+        materialization,
+        content_hash,
         status,
         message,
     })
 }
 
-fn target_is_managed(target_state: &TargetState) -> bool {
-    matches!(
-        target_state,
-        TargetState::ManagedSymlink { .. }
-            | TargetState::ManagedCopy { .. }
-            | TargetState::ManagedHardlink
-    )
+fn target_managed_kind(target_state: &TargetState) -> Option<MaterializationKind> {
+    match target_state {
+        TargetState::ManagedSymlink { .. } => Some(MaterializationKind::Symlink),
+        TargetState::ManagedCopy { .. } => Some(MaterializationKind::Copy),
+        TargetState::ManagedHardlink => Some(MaterializationKind::Hardlink),
+        _ => None,
+    }
 }
 
 fn stored_hardlink_matches(repo: &GitRepo, adapter: &Adapter, state: &State) -> Result<bool> {

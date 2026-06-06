@@ -268,6 +268,31 @@ fn tracked_claude_md_is_not_changed_or_ignored() {
     assert!(!exclude_text.contains("/CLAUDE.md"));
 }
 
+#[cfg(unix)]
+#[test]
+fn unknown_broken_symlink_is_not_removed_when_source_is_missing() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    std::os::unix::fs::symlink("DOES_NOT_EXIST", repo.join("CLAUDE.md")).unwrap();
+    let mut config = fixture.config();
+    config.adapters.claude.on_source_missing = SourceMissingBehavior::RemoveIfManaged;
+
+    let report = reconciler::apply(
+        &config,
+        false,
+        &[],
+        &fixture.state(),
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.no_source, 1);
+    assert_eq!(
+        fs::read_link(repo.join("CLAUDE.md")).unwrap(),
+        PathBuf::from("DOES_NOT_EXIST")
+    );
+}
+
 #[test]
 fn adapter_target_path_cannot_escape_repo_root() {
     let fixture = Fixture::new();
@@ -498,6 +523,47 @@ fn source_missing_with_user_file_removes_stale_exclude_even_when_leaving_managed
 }
 
 #[test]
+fn clean_with_user_file_removes_stale_exclude_when_source_is_missing() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    let config = fixture.config();
+    let state = fixture.state();
+
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+    fs::remove_file(repo.join("CLAUDE.md")).unwrap();
+    fs::write(repo.join("CLAUDE.md"), "user-owned replacement\n").unwrap();
+    fs::remove_file(repo.join("AGENTS.md")).unwrap();
+
+    let report = cleaner::clean(
+        &config,
+        false,
+        &[],
+        &state,
+        CleanOptions {
+            dry_run: false,
+            remove_if_source_missing: true,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.no_source, 1);
+    assert_eq!(report.summary.exclude_updates, 1);
+    assert_eq!(
+        fs::read_to_string(repo.join("CLAUDE.md")).unwrap(),
+        "user-owned replacement\n"
+    );
+    assert_eq!(git_status(&repo, "CLAUDE.md"), "?? CLAUDE.md\n");
+}
+
+#[test]
 fn source_missing_after_deleted_managed_target_removes_stale_exclude() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
@@ -601,6 +667,167 @@ fn clean_removes_stale_hardlink_after_source_deletion() {
 
     assert_eq!(report.summary.cleaned, 1);
     assert_eq!(report.summary.exclude_updates, 1);
+    assert!(!repo.join("CLAUDE.md").exists());
+}
+
+#[test]
+fn apply_no_source_does_not_forget_stale_hardlink_ownership() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "v1\n").unwrap();
+    let mut config = fixture.config();
+    config.materialization.strategy = MaterializationStrategy::Hardlink;
+    config.materialization.allow_hardlink = true;
+    let state = fixture.state();
+
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+    fs::remove_file(repo.join("AGENTS.md")).unwrap();
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    let report = cleaner::clean(
+        &config,
+        false,
+        &[],
+        &state,
+        CleanOptions {
+            dry_run: false,
+            remove_if_source_missing: true,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.cleaned, 1);
+    assert_eq!(report.summary.exclude_updates, 1);
+    assert!(!repo.join("CLAUDE.md").exists());
+}
+
+#[test]
+fn clean_preview_does_not_forget_stale_hardlink_ownership() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "v1\n").unwrap();
+    let mut config = fixture.config();
+    config.materialization.strategy = MaterializationStrategy::Hardlink;
+    config.materialization.allow_hardlink = true;
+    let state = fixture.state();
+
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+    fs::remove_file(repo.join("AGENTS.md")).unwrap();
+
+    let preview = cleaner::clean(
+        &config,
+        false,
+        &[],
+        &state,
+        CleanOptions {
+            dry_run: false,
+            remove_if_source_missing: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(preview.summary.no_source, 1);
+
+    let cleaned = cleaner::clean(
+        &config,
+        false,
+        &[],
+        &state,
+        CleanOptions {
+            dry_run: false,
+            remove_if_source_missing: true,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(cleaned.summary.cleaned, 1);
+    assert!(!repo.join("CLAUDE.md").exists());
+}
+
+#[test]
+fn cli_dry_run_clean_reads_existing_state_for_hardlinks() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "v1\n").unwrap();
+    let config_path = fixture.root.path().join("config.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[scan]\nroots = [\"{}\"]\n\n[materialization]\nstrategy = \"hardlink\"\nallow_hardlink = true\n",
+            fixture.root.path().display()
+        ),
+    )
+    .unwrap();
+    let bin = env!("CARGO_BIN_EXE_claudectomy");
+
+    let apply = Command::new(bin)
+        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .args(["--config", config_path.to_str().unwrap(), "apply"])
+        .output()
+        .expect("apply runs");
+    assert!(
+        apply.status.success(),
+        "apply failed: {}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    fs::remove_file(repo.join("AGENTS.md")).unwrap();
+
+    let dry_run = Command::new(bin)
+        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .args([
+            "--dry-run",
+            "--json",
+            "--config",
+            config_path.to_str().unwrap(),
+            "clean",
+            "--remove-if-source-missing",
+        ])
+        .output()
+        .expect("dry-run clean runs");
+    assert!(
+        dry_run.status.success(),
+        "dry-run failed: {}",
+        String::from_utf8_lossy(&dry_run.stderr)
+    );
+    let dry_run_json: serde_json::Value = serde_json::from_slice(&dry_run.stdout).unwrap();
+    assert_eq!(dry_run_json["summary"]["cleaned"], 1);
+    assert!(repo.join("CLAUDE.md").exists());
+
+    let clean = Command::new(bin)
+        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "clean",
+            "--remove-if-source-missing",
+        ])
+        .output()
+        .expect("clean runs");
+    assert!(
+        clean.status.success(),
+        "clean failed: {}",
+        String::from_utf8_lossy(&clean.stderr)
+    );
     assert!(!repo.join("CLAUDE.md").exists());
 }
 
