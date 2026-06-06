@@ -28,7 +28,11 @@ pub fn remove(repo: &GitRepo, target_rel: &Path, mode: ExcludeMode, dry_run: boo
     match mode {
         ExcludeMode::PerRepo => remove_from_file(&repo.exclude_path, target_rel, dry_run),
         ExcludeMode::Global => {
-            ensure_entry_file(&repo.exclude_path, &unignore_entry(target_rel), dry_run)
+            let removed_ignore =
+                remove_entry_file(&repo.exclude_path, &ignore_entry(target_rel), dry_run)?;
+            let ensured_unignore =
+                ensure_entry_file(&repo.exclude_path, &unignore_entry(target_rel), dry_run)?;
+            Ok(removed_ignore || ensured_unignore)
         }
     }
 }

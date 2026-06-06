@@ -442,12 +442,14 @@ fn status_for(previous_state: TargetState, changed: bool) -> Status {
 }
 
 fn message_for(status: Status, kind: MaterializationKind, dry_run: bool) -> String {
-    let prefix = if dry_run { "would " } else { "" };
     match status {
-        Status::Created => format!("{prefix}created {kind:?} shim"),
-        Status::Refreshed => format!("{prefix}refreshed managed copy"),
+        Status::Created if dry_run => format!("would create {kind:?} shim"),
+        Status::Created => format!("created {kind:?} shim"),
+        Status::Refreshed if dry_run => "would refresh managed copy".to_string(),
+        Status::Refreshed => "refreshed managed copy".to_string(),
         Status::Kept => format!("managed {kind:?} already correct"),
-        Status::Repaired => format!("{prefix}repaired {kind:?} shim"),
+        Status::Repaired if dry_run => format!("would repair {kind:?} shim"),
+        Status::Repaired => format!("repaired {kind:?} shim"),
         _ => format!("{status:?}"),
     }
 }
