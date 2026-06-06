@@ -93,28 +93,29 @@ fn clean_adapter(
     let managed_kind = target_managed_kind(&target_state).or(stored_missing_kind);
     let managed = managed_kind.is_some();
 
-    if !source_exists && unmanaged_target_exists && managed_kind.is_none() {
+    if unmanaged_target_exists && managed_kind.is_none() {
         let exclude_updated =
             crate::exclude::remove(repo, &adapter.target, exclude_mode, options.dry_run)?;
-        let result = result_for(
-            repo,
-            adapter,
-            Status::NoSource,
-            if exclude_updated {
-                "source file does not exist; target is not managed; Git exclude removed"
+        let status = if source_exists {
+            Status::Conflict
+        } else {
+            Status::NoSource
+        };
+        let mut message = if source_exists {
+            "target exists and is not managed; leaving it visible to Git".to_string()
+        } else {
+            "source file does not exist; target is not managed".to_string()
+        };
+        if exclude_updated {
+            if options.dry_run {
+                message.push_str("; would remove stale Git exclude");
             } else {
-                "source file does not exist; target is not managed"
-            },
-        );
+                message.push_str("; Git exclude removed");
+            }
+        }
+        let result = result_for(repo, adapter, status, message);
         if !options.dry_run {
-            record(
-                state,
-                repo,
-                adapter,
-                None,
-                Status::NoSource,
-                &result.message,
-            )?;
+            record(state, repo, adapter, None, status, &result.message)?;
         }
         return Ok((result, exclude_updated));
     }

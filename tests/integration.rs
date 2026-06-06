@@ -1880,6 +1880,46 @@ fn clean_with_user_file_removes_stale_exclude_when_source_is_missing() {
 }
 
 #[test]
+fn clean_with_user_file_removes_stale_exclude_when_source_exists() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    let config = fixture.config();
+    let state = fixture.state();
+
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+    fs::remove_file(repo.join("CLAUDE.md")).unwrap();
+    fs::write(repo.join("CLAUDE.md"), "user-owned replacement\n").unwrap();
+
+    let report = cleaner::clean(
+        &config,
+        false,
+        &[],
+        &state,
+        CleanOptions {
+            dry_run: false,
+            remove_if_source_missing: false,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.conflicts, 1);
+    assert_eq!(report.summary.exclude_updates, 1);
+    assert_eq!(
+        fs::read_to_string(repo.join("CLAUDE.md")).unwrap(),
+        "user-owned replacement\n"
+    );
+    assert_eq!(git_status(&repo, "CLAUDE.md"), "?? CLAUDE.md\n");
+}
+
+#[test]
 fn source_missing_after_deleted_managed_target_removes_stale_exclude() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
@@ -2270,7 +2310,9 @@ fn clean_does_not_reclaim_hardlink_after_source_replacement() {
         },
     )
     .unwrap();
-    assert_eq!(preview.summary.kept, 1);
+    assert_eq!(preview.summary.conflicts, 1);
+    assert_eq!(preview.summary.exclude_updates, 1);
+    assert_eq!(git_status(&repo, "CLAUDE.md"), "?? CLAUDE.md\n");
 
     let conflict = reconciler::apply(
         &config,
@@ -2282,7 +2324,7 @@ fn clean_does_not_reclaim_hardlink_after_source_replacement() {
     .unwrap();
 
     assert_eq!(conflict.summary.conflicts, 1);
-    assert_eq!(conflict.summary.exclude_updates, 1);
+    assert_eq!(conflict.summary.exclude_updates, 0);
     assert_eq!(fs::read_to_string(repo.join("CLAUDE.md")).unwrap(), "v1\n");
     assert!(!same_file::is_same_file(repo.join("AGENTS.md"), repo.join("CLAUDE.md")).unwrap());
 }
