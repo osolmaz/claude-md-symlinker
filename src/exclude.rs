@@ -16,7 +16,7 @@ const END: &str = "# claudectomy managed end";
 
 pub fn ensure(repo: &GitRepo, target_rel: &Path, mode: ExcludeMode, dry_run: bool) -> Result<bool> {
     match mode {
-        ExcludeMode::PerRepo => ensure_file(&repo.exclude_path, target_rel, dry_run),
+        ExcludeMode::PerRepo => ensure_file(repo, target_rel, dry_run),
         ExcludeMode::Global => reject_global_mode(),
     }
 }
@@ -24,9 +24,9 @@ pub fn ensure(repo: &GitRepo, target_rel: &Path, mode: ExcludeMode, dry_run: boo
 pub fn remove(repo: &GitRepo, target_rel: &Path, mode: ExcludeMode, dry_run: bool) -> Result<bool> {
     match mode {
         ExcludeMode::PerRepo => {
-            let removed_ignore = remove_from_file(&repo.exclude_path, target_rel, dry_run)?;
+            let removed_ignore = remove_from_file(repo, target_rel, dry_run)?;
             let ensured_unignore = if claudectomy_global_ignore_is_active(target_rel)? {
-                ensure_entry_file(&repo.exclude_path, &unignore_entry(target_rel), dry_run)?
+                ensure_entry_file(repo, &unignore_entry(target_rel), dry_run)?
             } else {
                 false
             };
@@ -84,11 +84,13 @@ fn normalized_path(path: &Path) -> Result<PathBuf> {
     Ok(absolute.canonicalize().unwrap_or(absolute))
 }
 
-fn ensure_file(path: &Path, target_rel: &Path, dry_run: bool) -> Result<bool> {
-    ensure_entry_file(path, &ignore_entry(target_rel), dry_run)
+fn ensure_file(repo: &GitRepo, target_rel: &Path, dry_run: bool) -> Result<bool> {
+    ensure_entry_file(repo, &ignore_entry(target_rel), dry_run)
 }
 
-fn ensure_entry_file(path: &Path, entry: &str, dry_run: bool) -> Result<bool> {
+fn ensure_entry_file(repo: &GitRepo, entry: &str, dry_run: bool) -> Result<bool> {
+    let path = &repo.exclude_path;
+    validate_exclude_location(repo)?;
     let current = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -103,8 +105,9 @@ fn ensure_entry_file(path: &Path, entry: &str, dry_run: bool) -> Result<bool> {
     }
 
     if dry_run {
-        validate_exclude_writable(path)?;
+        validate_exclude_writable(repo)?;
     } else {
+        validate_exclude_writable(repo)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create exclude dir {}", parent.display()))?;
@@ -115,11 +118,13 @@ fn ensure_entry_file(path: &Path, entry: &str, dry_run: bool) -> Result<bool> {
     Ok(true)
 }
 
-fn remove_from_file(path: &Path, target_rel: &Path, dry_run: bool) -> Result<bool> {
-    remove_entry_file(path, &ignore_entry(target_rel), dry_run)
+fn remove_from_file(repo: &GitRepo, target_rel: &Path, dry_run: bool) -> Result<bool> {
+    remove_entry_file(repo, &ignore_entry(target_rel), dry_run)
 }
 
-fn remove_entry_file(path: &Path, entry: &str, dry_run: bool) -> Result<bool> {
+fn remove_entry_file(repo: &GitRepo, entry: &str, dry_run: bool) -> Result<bool> {
+    let path = &repo.exclude_path;
+    validate_exclude_location(repo)?;
     let current = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -135,17 +140,75 @@ fn remove_entry_file(path: &Path, entry: &str, dry_run: bool) -> Result<bool> {
     }
 
     if dry_run {
-        validate_exclude_writable(path)?;
+        validate_exclude_writable(repo)?;
     } else {
+        validate_exclude_writable(repo)?;
         fs::write(path, next)
             .with_context(|| format!("failed to write exclude file {}", path.display()))?;
     }
     Ok(true)
 }
 
-fn validate_exclude_writable(path: &Path) -> Result<()> {
+fn validate_exclude_location(repo: &GitRepo) -> Result<()> {
+    let path = &repo.exclude_path;
+    let git_dir = repo
+        .git_dir
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize Git dir {}", repo.git_dir.display()))?;
+    let git_common_dir = repo.git_common_dir.canonicalize().with_context(|| {
+        format!(
+            "failed to canonicalize Git common dir {}",
+            repo.git_common_dir.display()
+        )
+    })?;
+    let parent = path
+        .parent()
+        .with_context(|| format!("exclude path {} has no parent", path.display()))?;
+    let existing_parent = nearest_existing_ancestor(parent).with_context(|| {
+        format!(
+            "exclude parent {} has no existing ancestor",
+            parent.display()
+        )
+    })?;
+    let resolved_parent = existing_parent.canonicalize().with_context(|| {
+        format!(
+            "failed to canonicalize exclude parent {}",
+            existing_parent.display()
+        )
+    })?;
+    if !resolved_parent.starts_with(&git_dir) && !resolved_parent.starts_with(&git_common_dir) {
+        bail!(
+            "exclude path {} resolves outside Git dirs {} and {}",
+            path.display(),
+            git_dir.display(),
+            git_common_dir.display()
+        );
+    }
+
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                bail!("exclude file {} is a symlink", path.display());
+            }
+            if !metadata.is_file() {
+                bail!("exclude file {} is not a regular file", path.display());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect exclude file {}", path.display()));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_exclude_writable(repo: &GitRepo) -> Result<()> {
+    validate_exclude_location(repo)?;
+    let path = &repo.exclude_path;
     if path.exists() {
-        let metadata = fs::metadata(path)
+        let metadata = fs::symlink_metadata(path)
             .with_context(|| format!("failed to inspect exclude file {}", path.display()))?;
         if metadata.permissions().readonly() {
             bail!("exclude file {} is not writable", path.display());
@@ -166,6 +229,15 @@ fn validate_exclude_writable(path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn nearest_existing_ancestor(mut path: &Path) -> Option<&Path> {
+    loop {
+        if path.exists() {
+            return Some(path);
+        }
+        path = path.parent()?;
+    }
 }
 
 fn ignore_entry(target_rel: &Path) -> String {

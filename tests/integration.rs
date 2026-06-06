@@ -2997,6 +2997,108 @@ fn clean_invalid_exclude_leaves_managed_target_in_place() {
     assert_eq!(fs::read(&exclude_path).unwrap(), invalid_exclude);
 }
 
+#[cfg(unix)]
+#[test]
+fn symlinked_git_exclude_file_is_rejected_before_writing() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    let exclude_path = git_exclude_path(&repo);
+    fs::remove_file(&exclude_path).unwrap();
+    let victim = fixture.root.path().join("victim-exclude");
+    fs::write(&victim, "KEEP\n").unwrap();
+    std::os::unix::fs::symlink(&victim, &exclude_path).unwrap();
+
+    let report = reconciler::apply(
+        &fixture.config(),
+        false,
+        &[],
+        &fixture.state(),
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.errors, 1);
+    assert_eq!(report.summary.created, 0);
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "KEEP\n");
+    assert!(!repo.join("CLAUDE.md").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_git_exclude_file_is_rejected_before_removing() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    let config = fixture.config();
+    let state = fixture.state();
+
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+    fs::remove_file(repo.join("CLAUDE.md")).unwrap();
+    fs::write(repo.join("CLAUDE.md"), "user-owned replacement\n").unwrap();
+    let exclude_path = git_exclude_path(&repo);
+    fs::remove_file(&exclude_path).unwrap();
+    let victim = fixture.root.path().join("victim-exclude");
+    let victim_text = "# claudectomy managed begin\n/CLAUDE.md\n# claudectomy managed end\n";
+    fs::write(&victim, victim_text).unwrap();
+    std::os::unix::fs::symlink(&victim, &exclude_path).unwrap();
+
+    let report = reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.errors, 1);
+    assert_eq!(report.summary.conflicts, 0);
+    assert_eq!(fs::read_to_string(&victim).unwrap(), victim_text);
+    assert_eq!(
+        fs::read_to_string(repo.join("CLAUDE.md")).unwrap(),
+        "user-owned replacement\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_git_exclude_parent_is_rejected_before_writing() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    let exclude_path = git_exclude_path(&repo);
+    let info_dir = exclude_path.parent().unwrap();
+    fs::remove_dir_all(info_dir).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("exclude"), "KEEP\n").unwrap();
+    std::os::unix::fs::symlink(outside.path(), info_dir).unwrap();
+
+    let report = reconciler::apply(
+        &fixture.config(),
+        false,
+        &[],
+        &fixture.state(),
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.errors, 1);
+    assert_eq!(report.summary.created, 0);
+    assert_eq!(
+        fs::read_to_string(outside.path().join("exclude")).unwrap(),
+        "KEEP\n"
+    );
+    assert!(!repo.join("CLAUDE.md").exists());
+}
+
 #[test]
 fn remove_if_managed_invalid_exclude_leaves_managed_target_in_place() {
     let fixture = Fixture::new();

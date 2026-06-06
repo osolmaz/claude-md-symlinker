@@ -10,6 +10,7 @@ use serde::Serialize;
 pub struct GitRepo {
     pub root: PathBuf,
     pub git_dir: PathBuf,
+    pub git_common_dir: PathBuf,
     pub exclude_path: PathBuf,
 }
 
@@ -40,11 +41,13 @@ pub fn discover_repo(path: &Path) -> Result<Option<GitRepo>> {
     }
 
     let git_dir = git_path(&root, &["rev-parse", "--git-dir"])?;
+    let git_common_dir = git_path(&root, &["rev-parse", "--git-common-dir"])?;
     let exclude_path = git_path(&root, &["rev-parse", "--git-path", "info/exclude"])?;
 
     Ok(Some(GitRepo {
         root,
         git_dir,
+        git_common_dir,
         exclude_path,
     }))
 }
