@@ -738,6 +738,34 @@ fn target_with_gitignore_metacharacters_is_excluded_literally() {
 }
 
 #[test]
+fn tracked_check_treats_target_metacharacters_literally() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    fs::write(repo.join("CLAUDEA.md"), "tracked but different\n").unwrap();
+    git(&repo, &["add", "CLAUDEA.md"]);
+    let mut config = fixture.config();
+    config.adapters.claude.target = PathBuf::from("CLAUDE?.md");
+
+    let report = reconciler::apply(
+        &config,
+        false,
+        &[],
+        &fixture.state(),
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.created, 1);
+    assert_eq!(report.summary.tracked_conflicts, 0);
+    assert!(repo.join("CLAUDE?.md").exists());
+    assert_eq!(
+        fs::read_to_string(repo.join("CLAUDEA.md")).unwrap(),
+        "tracked but different\n"
+    );
+}
+
+#[test]
 fn invalid_utf8_exclude_file_is_not_overwritten() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");

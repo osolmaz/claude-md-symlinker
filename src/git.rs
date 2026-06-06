@@ -53,6 +53,7 @@ pub fn is_tracked(repo: &GitRepo, rel_path: &Path) -> Result<bool> {
     let output = Command::new("git")
         .arg("-C")
         .arg(&repo.root)
+        .arg("--literal-pathspecs")
         .arg("ls-files")
         .arg("--error-unmatch")
         .arg("--")
