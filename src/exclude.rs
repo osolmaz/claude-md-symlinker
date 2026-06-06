@@ -64,7 +64,7 @@ fn claudectomy_global_ignore_is_active(target_rel: &Path) -> Result<bool> {
         }
     };
     let entry = ignore_entry(target_rel);
-    Ok(current.lines().any(|line| line.trim() == entry))
+    Ok(current.lines().any(|line| line == entry))
 }
 
 fn normalized_path(path: &Path) -> Result<PathBuf> {

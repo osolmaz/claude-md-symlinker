@@ -120,7 +120,7 @@ fn run() -> Result<u8> {
         cli::Command::Watch(watch_args) => {
             let loaded = config::load(args.config.as_deref())?;
             let state = command_state(args.dry_run)?;
-            watch::run(loaded, &watch_args.roots, &state, args.dry_run)?;
+            watch::run(loaded, &watch_args.roots, &state, args.dry_run, args.json)?;
             Ok(0)
         }
     }

@@ -13,7 +13,7 @@ use crate::{
     adapters::{self, Adapter},
     config::{self, AppConfig, LoadedConfig, ScanScope, WatchConfig},
     reconciler::{self, ReconcileOptions},
-    reporting::print_plain,
+    reporting::{print_json, print_plain},
     state::State,
 };
 
@@ -26,14 +26,22 @@ struct ActiveConfig {
     adapters: Vec<Adapter>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RunOptions {
+    dry_run: bool,
+    json: bool,
+}
+
 pub fn run(
     loaded: LoadedConfig,
     cli_roots: &[PathBuf],
     state: &State,
     dry_run: bool,
+    json: bool,
 ) -> Result<()> {
     let config_path = loaded.path.clone();
     let mut active = active_config(loaded, cli_roots)?;
+    let options = RunOptions { dry_run, json };
 
     let (tx, rx) = mpsc::channel();
     let mut watcher = RecommendedWatcher::new(
@@ -51,7 +59,7 @@ pub fn run(
         desired_watch_targets(&active.scope, &config_path),
     )?;
 
-    run_once(&active, cli_roots, state, dry_run)?;
+    run_once(&active, cli_roots, state, options)?;
 
     let debounce = Duration::from_millis(500);
     let mut last_run = Instant::now();
@@ -89,7 +97,7 @@ pub fn run(
                         &config_path,
                         cli_roots,
                         state,
-                        dry_run,
+                        options,
                     )?;
                     last_run = Instant::now();
                 }
@@ -105,7 +113,7 @@ pub fn run(
                     &config_path,
                     cli_roots,
                     state,
-                    dry_run,
+                    options,
                 )?;
                 last_run = Instant::now();
             }
@@ -129,7 +137,7 @@ fn reload_and_run(
     config_path: &Path,
     cli_roots: &[PathBuf],
     state: &State,
-    dry_run: bool,
+    options: RunOptions,
 ) -> Result<bool> {
     let next = match reload_active_config(config_path, cli_roots) {
         Ok(active) => active,
@@ -144,7 +152,7 @@ fn reload_and_run(
         desired_watch_targets(&next.scope, config_path),
     )?;
     *active = next;
-    run_once(active, cli_roots, state, dry_run)?;
+    run_once(active, cli_roots, state, options)?;
     Ok(true)
 }
 
@@ -152,16 +160,22 @@ fn run_once(
     active: &ActiveConfig,
     cli_roots: &[PathBuf],
     state: &State,
-    dry_run: bool,
+    options: RunOptions,
 ) -> Result<()> {
     let report = reconciler::apply(
         &active.config,
         active.config_existed,
         cli_roots,
         state,
-        ReconcileOptions { dry_run },
+        ReconcileOptions {
+            dry_run: options.dry_run,
+        },
     )?;
-    print_plain(&report, dry_run);
+    if options.json {
+        print_json(&report);
+    } else {
+        print_plain(&report, options.dry_run);
+    }
     Ok(())
 }
 

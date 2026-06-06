@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{collections::BTreeMap, fs, io::ErrorKind, path::PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -281,7 +281,6 @@ fn reconcile_adapter(
         }
         target_state => {
             let previous_state = target_state.clone();
-            let target_was_missing = matches!(previous_state, TargetState::Missing);
             let exclude_updated = exclude::ensure(
                 repo,
                 &adapter.target,
@@ -295,10 +294,7 @@ fn reconcile_adapter(
                 options.dry_run,
             )
             .inspect_err(|_| {
-                if target_was_missing
-                    && !options.dry_run
-                    && fs::symlink_metadata(repo.root.join(&adapter.target)).is_err()
-                {
+                if !options.dry_run && target_is_missing(repo, adapter) {
                     let _ = exclude::remove(
                         repo,
                         &adapter.target,
@@ -329,6 +325,13 @@ fn reconcile_adapter(
             Ok((result, exclude_updated))
         }
     }
+}
+
+fn target_is_missing(repo: &GitRepo, adapter: &Adapter) -> bool {
+    matches!(
+        fs::symlink_metadata(repo.root.join(&adapter.target)),
+        Err(error) if error.kind() == ErrorKind::NotFound
+    )
 }
 
 fn unmanaged_conflict(

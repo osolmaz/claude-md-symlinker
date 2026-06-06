@@ -1,7 +1,9 @@
 use std::{
     fs,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -1507,6 +1509,58 @@ fn failed_refresh_of_existing_managed_target_keeps_exclude() {
     assert!(exclude_text.lines().any(|line| line == "/CLAUDE.md"));
 }
 
+#[cfg(unix)]
+#[test]
+fn failed_strategy_replacement_removes_stale_exclude_when_target_was_removed() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let source_rel = deep_relative_path("source", 1300, "AGENTS.md");
+    let target_rel = deep_relative_path("target", 1300, "CLAUDE.md");
+    let Some(source_parent) = source_rel.parent() else {
+        panic!("source has parent");
+    };
+    let Some(target_parent) = target_rel.parent() else {
+        panic!("target has parent");
+    };
+    if fs::create_dir_all(repo.join(source_parent)).is_err()
+        || fs::create_dir_all(repo.join(target_parent)).is_err()
+    {
+        return;
+    }
+    fs::write(repo.join(&source_rel), "canonical instructions\n").unwrap();
+    let mut config = fixture.config();
+    config.adapters.claude.source = source_rel;
+    config.adapters.claude.target = target_rel.clone();
+    config.materialization.strategy = MaterializationStrategy::Copy;
+    let state = fixture.state();
+
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    config.materialization.strategy = MaterializationStrategy::Symlink;
+    let report = reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.errors, 1);
+    assert!(!repo.join(&target_rel).exists());
+    let target_entry = format!("/{}", target_rel.display());
+    let exclude_text = fs::read_to_string(git_exclude_path(&repo)).unwrap_or_default();
+    assert!(!exclude_text.lines().any(|line| line == target_entry));
+    assert!(!git_check_ignore(&repo, target_rel.to_str().unwrap()));
+}
+
 #[test]
 fn clean_removes_only_stale_managed_shims_when_requested() {
     let fixture = Fixture::new();
@@ -2450,6 +2504,55 @@ fn per_repo_mode_unignores_owned_global_exclude_configured_with_tilde() {
 }
 
 #[test]
+fn per_repo_mode_unignores_owned_global_exclude_with_escaped_trailing_space() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    fs::write(repo.join("CLAUDE.md "), "user-owned replacement\n").unwrap();
+    let mut config = fixture.config();
+    config.adapters.claude.target = PathBuf::from("CLAUDE.md ");
+    let config_path = fixture.root.path().join("config.toml");
+    fs::write(&config_path, toml::to_string(&config).unwrap()).unwrap();
+    let data_dir = fixture.data.path();
+    fs::write(
+        data_dir.join("git-excludes"),
+        "# claudectomy managed begin\n/CLAUDE.md\\ \n# claudectomy managed end\n",
+    )
+    .unwrap();
+    let global_config = fixture.root.path().join("global-gitconfig");
+    let configured = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .args([
+            "config",
+            "--global",
+            "core.excludesFile",
+            data_dir.join("git-excludes").to_str().unwrap(),
+        ])
+        .output()
+        .expect("git config writes");
+    assert!(
+        configured.status.success(),
+        "git config failed: {}",
+        String::from_utf8_lossy(&configured.stderr)
+    );
+
+    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let conflict = Command::new(bin)
+        .env("CLAUDECTOMY_DATA_DIR", data_dir)
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .args(["--config", config_path.to_str().unwrap(), "apply"])
+        .output()
+        .expect("per-repo apply runs");
+    assert_eq!(conflict.status.code(), Some(2));
+
+    let exclude = fs::read_to_string(git_exclude_path(&repo)).unwrap();
+    assert!(exclude.lines().any(|line| line == "!/CLAUDE.md\\ "));
+    assert!(!exclude.lines().any(|line| line == "/CLAUDE.md\\ "));
+    assert!(!git_check_ignore(&repo, "CLAUDE.md "));
+    assert!(git_status(&repo, "CLAUDE.md ").starts_with("?? "));
+}
+
+#[test]
 fn clean_removes_stale_exclude_when_managed_target_was_already_deleted() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
@@ -2580,6 +2683,63 @@ fn watch_reloads_config_and_updates_watched_roots() {
 
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[test]
+fn watch_honors_json_output_flag() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("watch-json.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let bin = env!("CARGO_BIN_EXE_claudectomy");
+
+    let mut child = Command::new(bin)
+        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .args([
+            "--dry-run",
+            "--json",
+            "--config",
+            config_path.to_str().unwrap(),
+            "watch",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("watch starts");
+
+    let stdout = child.stdout.take().expect("stdout is piped");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut text = String::new();
+        for _ in 0..4 {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    text.push_str(&line);
+                    if text.contains("\"summary\"") {
+                        break;
+                    }
+                }
+            }
+        }
+        let _ = tx.send(text);
+    });
+
+    let output = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("watch should print an initial report");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        output.trim_start().starts_with('{'),
+        "watch output was not JSON: {output}"
+    );
+    assert!(output.contains("\"summary\""));
+    assert!(!output.contains("Scanned "));
 }
 
 #[test]
@@ -3080,6 +3240,15 @@ fn write_config_roots(path: &Path, roots: &[&Path]) {
         .collect::<Vec<_>>()
         .join(", ");
     fs::write(path, format!("[scan]\nroots = [{roots}]\n")).unwrap();
+}
+
+fn deep_relative_path(component: &str, depth: usize, file_name: &str) -> PathBuf {
+    let mut path = PathBuf::new();
+    for _ in 0..depth {
+        path.push(component);
+    }
+    path.push(file_name);
+    path
 }
 
 fn path_from_git_output(repo: &Path, text: &str) -> PathBuf {
