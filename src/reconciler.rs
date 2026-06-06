@@ -82,17 +82,23 @@ fn reconcile_adapter(
 
     if !source.exists() {
         let target_state = materializer::classify(repo, adapter)?;
+        let stored_kind = stored_managed_kind(repo, adapter, state)?;
         let stored_hardlink_matches = if matches!(target_state, TargetState::UnknownRegularFile) {
             stored_hardlink_matches(repo, adapter, state)?
         } else {
             false
         };
+        let stored_missing_kind = if matches!(target_state, TargetState::Missing) {
+            stored_kind
+        } else {
+            None
+        };
+        let stale_missing_managed_target = stored_missing_kind.is_some() && !shared_exclude;
+        let target_can_be_removed =
+            target_managed_kind(&target_state).is_some() || stored_hardlink_matches;
         let managed_kind = target_managed_kind(&target_state)
-            .or_else(|| stored_hardlink_matches.then_some(MaterializationKind::Hardlink));
-        let managed_target = managed_kind.is_some();
-        let stale_missing_managed_target = matches!(target_state, TargetState::Missing)
-            && stored_managed_shim_exists(repo, adapter, state)?
-            && !shared_exclude;
+            .or_else(|| stored_hardlink_matches.then_some(MaterializationKind::Hardlink))
+            .or(stored_missing_kind);
 
         if adapter.on_source_missing == SourceMissingBehavior::RemoveIfManaged {
             if git::is_tracked(repo, &adapter.target)
@@ -117,18 +123,18 @@ fn reconcile_adapter(
                 return Ok((result, false));
             }
 
-            if managed_target || stale_missing_managed_target {
-                let removed = if managed_target {
-                    materializer::remove_target(repo, adapter, options.dry_run)?
-                } else {
-                    false
-                };
+            if target_can_be_removed || stale_missing_managed_target {
                 let exclude_updated = exclude::remove(
                     repo,
                     &adapter.target,
                     config.git.exclude_mode,
                     options.dry_run,
                 )?;
+                let removed = if target_can_be_removed {
+                    materializer::remove_target(repo, adapter, options.dry_run)?
+                } else {
+                    false
+                };
                 let mut message = if removed {
                     if options.dry_run {
                         "would remove stale managed shim".to_string()
@@ -177,7 +183,7 @@ fn reconcile_adapter(
             TargetState::UnknownRegularFile | TargetState::UnknownSymlink | TargetState::Other
         );
         let should_remove_exclude = unmanaged_target_exists || stale_missing_managed_target;
-        let exclude_updated = if managed_target || !should_remove_exclude {
+        let exclude_updated = if target_can_be_removed || !should_remove_exclude {
             false
         } else {
             exclude::remove(
@@ -394,11 +400,15 @@ fn stored_hardlink_matches(repo: &GitRepo, adapter: &Adapter, state: &State) -> 
     Ok(materializer::target_hash(repo, adapter)? == stored.content_hash)
 }
 
-fn stored_managed_shim_exists(repo: &GitRepo, adapter: &Adapter, state: &State) -> Result<bool> {
+fn stored_managed_kind(
+    repo: &GitRepo,
+    adapter: &Adapter,
+    state: &State,
+) -> Result<Option<MaterializationKind>> {
     Ok(state
         .get_shim(repo, &adapter.name, &adapter.target.to_string_lossy())?
         .and_then(|stored| stored.materialization)
-        .is_some())
+        .and_then(|kind| MaterializationKind::from_state_value(&kind)))
 }
 
 fn exclude_path_counts(repos: &[GitRepo]) -> BTreeMap<PathBuf, usize> {

@@ -23,6 +23,17 @@ pub enum MaterializationKind {
     Hardlink,
 }
 
+impl MaterializationKind {
+    pub fn from_state_value(value: &str) -> Option<Self> {
+        Some(match value {
+            "symlink" => Self::Symlink,
+            "copy" => Self::Copy,
+            "hardlink" => Self::Hardlink,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TargetState {

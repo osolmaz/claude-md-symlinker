@@ -72,21 +72,31 @@ fn clean_adapter(
 ) -> Result<(RepoResult, bool)> {
     let source_exists = repo.root.join(&adapter.source).exists();
     let target_state = materializer::classify(repo, adapter)?;
+    let stored_kind = stored_managed_kind(repo, adapter, state)?;
     let unmanaged_target_exists = matches!(
         target_state,
         TargetState::UnknownRegularFile | TargetState::UnknownSymlink | TargetState::Other
     );
-    let stale_missing_managed_target = matches!(target_state, TargetState::Missing)
-        && stored_managed_shim_exists(repo, adapter, state)?
-        && !shared_exclude;
     let stored_hardlink_matches = if matches!(target_state, TargetState::UnknownRegularFile) {
         stored_hardlink_matches(repo, adapter, state)?
     } else {
         false
     };
+    let stored_missing_kind = if matches!(target_state, TargetState::Missing) {
+        stored_kind
+    } else {
+        None
+    };
+    let stale_missing_managed_target = stored_missing_kind.is_some() && !shared_exclude;
+    let target_can_be_removed =
+        target_managed_kind(&target_state).is_some() || stored_hardlink_matches;
     let managed_kind = target_managed_kind(&target_state)
-        .or_else(|| stored_hardlink_matches.then_some(MaterializationKind::Hardlink));
-    let managed = managed_kind.is_some() || stale_missing_managed_target;
+        .or_else(|| stored_hardlink_matches.then_some(MaterializationKind::Hardlink))
+        .or(stored_missing_kind);
+    let managed = managed_kind.is_some();
+    let stale_hardlink_waiting_for_apply = source_exists
+        && matches!(target_state, TargetState::UnknownRegularFile)
+        && stored_hardlink_matches;
 
     if !source_exists && unmanaged_target_exists && managed_kind.is_none() {
         let exclude_updated =
@@ -116,7 +126,7 @@ fn clean_adapter(
 
     if source_exists || !managed {
         let result = result_for(repo, adapter, Status::Kept, "nothing to clean");
-        if !options.dry_run {
+        if !options.dry_run && !stale_hardlink_waiting_for_apply {
             record(
                 state,
                 repo,
@@ -169,9 +179,14 @@ fn clean_adapter(
         return Ok((result, false));
     }
 
-    let removed = materializer::remove_target(repo, adapter, options.dry_run)?;
-    let exclude_updated = if removed || stale_missing_managed_target {
+    let should_update_exclude = target_can_be_removed || stale_missing_managed_target;
+    let exclude_updated = if should_update_exclude {
         crate::exclude::remove(repo, &adapter.target, exclude_mode, options.dry_run)?
+    } else {
+        false
+    };
+    let removed = if target_can_be_removed {
+        materializer::remove_target(repo, adapter, options.dry_run)?
     } else {
         false
     };
@@ -261,11 +276,15 @@ fn stored_hardlink_matches(repo: &GitRepo, adapter: &Adapter, state: &State) -> 
     Ok(materializer::target_hash(repo, adapter)? == stored.content_hash)
 }
 
-fn stored_managed_shim_exists(repo: &GitRepo, adapter: &Adapter, state: &State) -> Result<bool> {
+fn stored_managed_kind(
+    repo: &GitRepo,
+    adapter: &Adapter,
+    state: &State,
+) -> Result<Option<MaterializationKind>> {
     Ok(state
         .get_shim(repo, &adapter.name, &adapter.target.to_string_lossy())?
         .and_then(|stored| stored.materialization)
-        .is_some())
+        .and_then(|kind| MaterializationKind::from_state_value(&kind)))
 }
 
 fn exclude_path_counts(repos: &[GitRepo]) -> BTreeMap<PathBuf, usize> {
