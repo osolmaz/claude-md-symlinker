@@ -6,6 +6,7 @@ use tempfile::tempdir;
 
 use crate::{
     adapters,
+    config::ExcludeMode,
     config::{self, LoadedConfig},
     git,
     state::State,
@@ -34,18 +35,7 @@ impl DoctorReport {
             "local git binary was not found or is not executable",
         ));
 
-        checks.push(DoctorCheck {
-            name: "config".to_string(),
-            ok: true,
-            message: if loaded.existed {
-                format!("config loaded from {}", loaded.path.display())
-            } else {
-                format!(
-                    "config not found; defaults would use {}",
-                    loaded.path.display()
-                )
-            },
-        });
+        checks.push(config_check(loaded));
 
         checks.push(match config::data_dir() {
             Ok(dir) => match fs::create_dir_all(&dir) {
@@ -143,6 +133,30 @@ fn check(name: &str, ok: bool, ok_message: &str, fail_message: &str) -> DoctorCh
         name: name.to_string(),
         ok,
         message: if ok { ok_message } else { fail_message }.to_string(),
+    }
+}
+
+fn config_check(loaded: &LoadedConfig) -> DoctorCheck {
+    if loaded.config.git.exclude_mode == ExcludeMode::Global {
+        return DoctorCheck {
+            name: "config".to_string(),
+            ok: false,
+            message: "global exclude mode is disabled; set [git] exclude_mode = \"per_repo\""
+                .to_string(),
+        };
+    }
+
+    DoctorCheck {
+        name: "config".to_string(),
+        ok: true,
+        message: if loaded.existed {
+            format!("config loaded from {}", loaded.path.display())
+        } else {
+            format!(
+                "config not found; defaults would use {}",
+                loaded.path.display()
+            )
+        },
     }
 }
 

@@ -578,6 +578,51 @@ fn copy_materialization_refreshes_managed_copy() {
 }
 
 #[test]
+fn explicit_copy_strategy_replaces_existing_managed_symlink() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    let mut config = fixture.config();
+    let state = fixture.state();
+
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+    assert!(
+        fs::symlink_metadata(repo.join("CLAUDE.md"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+
+    config.materialization.strategy = MaterializationStrategy::Copy;
+    let report = reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.repaired, 1);
+    assert!(
+        !fs::symlink_metadata(repo.join("CLAUDE.md"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let text = fs::read_to_string(repo.join("CLAUDE.md")).unwrap();
+    assert!(text.contains("claudectomy managed"));
+    assert!(text.ends_with("canonical instructions\n"));
+}
+
+#[test]
 fn hardlink_materialization_recovers_after_source_replacement() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
@@ -610,6 +655,31 @@ fn hardlink_materialization_recovers_after_source_replacement() {
     assert_eq!(report.summary.repaired, 1);
     assert_eq!(fs::read_to_string(repo.join("CLAUDE.md")).unwrap(), "v2\n");
     assert!(same_file::is_same_file(repo.join("AGENTS.md"), repo.join("CLAUDE.md")).unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn dry_run_reports_unwritable_target_parent_error() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    let original_permissions = fs::metadata(&repo).unwrap().permissions();
+    fs::set_permissions(&repo, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let report = reconciler::apply(
+        &fixture.config(),
+        false,
+        &[],
+        &fixture.state(),
+        ReconcileOptions { dry_run: true },
+    );
+
+    fs::set_permissions(&repo, original_permissions).unwrap();
+    let report = report.unwrap();
+    assert_eq!(report.summary.errors, 1);
+    assert!(!repo.join("CLAUDE.md").exists());
 }
 
 #[test]
@@ -1284,6 +1354,32 @@ fn global_mode_is_rejected_without_mutating_repo_or_global_config() {
         .output()
         .expect("git config reads");
     assert!(!configured.status.success());
+}
+
+#[test]
+fn doctor_fails_when_global_mode_is_configured() {
+    let fixture = Fixture::new();
+    let config_path = fixture.root.path().join("config.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[scan]\nroots = [\"{}\"]\n\n[git]\nexclude_mode = \"global\"\n",
+            fixture.root.path().display()
+        ),
+    )
+    .unwrap();
+    let bin = env!("CARGO_BIN_EXE_claudectomy");
+
+    let doctor = Command::new(bin)
+        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .args(["--config", config_path.to_str().unwrap(), "doctor"])
+        .output()
+        .expect("doctor runs");
+
+    assert_eq!(doctor.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&doctor.stdout);
+    assert!(stdout.contains("fail\tconfig"));
+    assert!(stdout.contains("global exclude mode is disabled"));
 }
 
 #[test]
