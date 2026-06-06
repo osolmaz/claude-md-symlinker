@@ -259,6 +259,7 @@ fn reconcile_adapter(
         }
         target_state => {
             let previous_state = target_state.clone();
+            let target_was_missing = matches!(previous_state, TargetState::Missing);
             let exclude_updated = exclude::ensure(
                 repo,
                 &adapter.target,
@@ -272,7 +273,7 @@ fn reconcile_adapter(
                 options.dry_run,
             )
             .inspect_err(|_| {
-                if exclude_updated && !options.dry_run {
+                if (exclude_updated || target_was_missing) && !options.dry_run {
                     let _ = exclude::remove(
                         repo,
                         &adapter.target,

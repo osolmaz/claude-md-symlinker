@@ -1137,6 +1137,48 @@ fn dry_run_reports_unwritable_target_parent_error() {
     assert!(!repo.join("CLAUDE.md").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn failed_recreate_of_missing_target_removes_stale_exclude() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    let config = fixture.config();
+    let state = fixture.state();
+
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+    fs::remove_file(repo.join("CLAUDE.md")).unwrap();
+
+    let original_permissions = fs::metadata(&repo).unwrap().permissions();
+    fs::set_permissions(&repo, fs::Permissions::from_mode(0o555)).unwrap();
+    let report = reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    );
+    fs::set_permissions(&repo, original_permissions).unwrap();
+
+    let report = report.unwrap();
+    assert_eq!(report.summary.errors, 1);
+    assert!(!repo.join("CLAUDE.md").exists());
+    let exclude_text = fs::read_to_string(git_exclude_path(&repo)).unwrap();
+    assert!(!exclude_text.lines().any(|line| line == "/CLAUDE.md"));
+
+    fs::write(repo.join("CLAUDE.md"), "user-owned replacement\n").unwrap();
+    assert_eq!(git_status(&repo, "CLAUDE.md"), "?? CLAUDE.md\n");
+}
+
 #[test]
 fn clean_removes_only_stale_managed_shims_when_requested() {
     let fixture = Fixture::new();

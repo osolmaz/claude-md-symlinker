@@ -126,6 +126,7 @@ fn run() -> Result<u8> {
                 &watch_args.roots,
                 &state,
                 args.dry_run,
+                &loaded.path,
             )?;
             Ok(0)
         }
