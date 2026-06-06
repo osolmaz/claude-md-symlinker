@@ -59,12 +59,8 @@ fn clean_adapter(
 ) -> Result<(RepoResult, bool)> {
     let source_exists = repo.root.join(&adapter.source).exists();
     let target_state = materializer::classify(repo, adapter)?;
-    let managed = matches!(
-        target_state,
-        TargetState::ManagedSymlink { .. }
-            | TargetState::ManagedCopy { .. }
-            | TargetState::ManagedHardlink
-    );
+    let managed =
+        target_is_managed(&target_state) || stored_hardlink_matches(repo, adapter, state)?;
 
     if source_exists || !managed {
         let result = result_for(repo, adapter, Status::Kept, "nothing to clean");
@@ -129,6 +125,28 @@ fn record(
         status,
         message,
     })
+}
+
+fn target_is_managed(target_state: &TargetState) -> bool {
+    matches!(
+        target_state,
+        TargetState::ManagedSymlink { .. }
+            | TargetState::ManagedCopy { .. }
+            | TargetState::ManagedHardlink
+    )
+}
+
+fn stored_hardlink_matches(repo: &GitRepo, adapter: &Adapter, state: &State) -> Result<bool> {
+    let Some(stored) = state.get_shim(repo, &adapter.name, &adapter.target.to_string_lossy())?
+    else {
+        return Ok(false);
+    };
+
+    if stored.materialization.as_deref() != Some("hardlink") {
+        return Ok(false);
+    }
+
+    Ok(materializer::target_hash(repo, adapter)? == stored.content_hash)
 }
 
 fn result_for(

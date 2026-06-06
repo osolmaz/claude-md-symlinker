@@ -198,18 +198,28 @@ fn reconcile_adapter(
         }
         target_state => {
             let previous_state = target_state.clone();
-            let outcome = materializer::create_or_refresh(
-                repo,
-                adapter,
-                &config.materialization,
-                options.dry_run,
-            )?;
             let exclude_updated = exclude::ensure(
                 repo,
                 &adapter.target,
                 config.git.exclude_mode,
                 options.dry_run,
             )?;
+            let outcome = materializer::create_or_refresh(
+                repo,
+                adapter,
+                &config.materialization,
+                options.dry_run,
+            )
+            .inspect_err(|_| {
+                if exclude_updated && !options.dry_run {
+                    let _ = exclude::remove(
+                        repo,
+                        &adapter.target,
+                        config.git.exclude_mode,
+                        options.dry_run,
+                    );
+                }
+            })?;
 
             let status = status_for(previous_state, outcome.changed);
             let mut message = message_for(status, outcome.kind, options.dry_run);
@@ -285,13 +295,23 @@ fn recover_stale_hardlink(
         return Ok(None);
     }
 
-    let outcome = materializer::recreate_hardlink(repo, adapter, options.dry_run)?;
     let exclude_updated = exclude::ensure(
         repo,
         &adapter.target,
         config.git.exclude_mode,
         options.dry_run,
     )?;
+    let outcome =
+        materializer::recreate_hardlink(repo, adapter, options.dry_run).inspect_err(|_| {
+            if exclude_updated && !options.dry_run {
+                let _ = exclude::remove(
+                    repo,
+                    &adapter.target,
+                    config.git.exclude_mode,
+                    options.dry_run,
+                );
+            }
+        })?;
     let mut message = message_for(Status::Repaired, outcome.kind, options.dry_run);
     if exclude_updated {
         message.push_str("; Git exclude updated");

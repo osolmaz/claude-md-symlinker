@@ -512,6 +512,43 @@ fn remove_if_managed_cleans_stale_hardlink_after_source_deletion() {
 }
 
 #[test]
+fn clean_removes_stale_hardlink_after_source_deletion() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "v1\n").unwrap();
+    let mut config = fixture.config();
+    config.materialization.strategy = MaterializationStrategy::Hardlink;
+    config.materialization.allow_hardlink = true;
+    let state = fixture.state();
+
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+    fs::remove_file(repo.join("AGENTS.md")).unwrap();
+
+    let report = cleaner::clean(
+        &config,
+        false,
+        &[],
+        &state,
+        CleanOptions {
+            dry_run: false,
+            remove_if_source_missing: true,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.cleaned, 1);
+    assert_eq!(report.summary.exclude_updates, 1);
+    assert!(!repo.join("CLAUDE.md").exists());
+}
+
+#[test]
 fn linked_worktree_uses_worktree_exclude_file() {
     let fixture = Fixture::new();
     let main_repo = fixture.repo("main");

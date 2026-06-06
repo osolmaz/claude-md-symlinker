@@ -35,10 +35,13 @@ fn run() -> Result<u8> {
             let loaded = config::load(args.config.as_deref())?;
             let mut cfg = loaded.config;
             cfg.set_scan_roots(init.roots)?;
-            config::save(args.config.as_deref().or(Some(loaded.path.as_path())), &cfg)?;
-            println!("Wrote {}", loaded.path.display());
+            let saved_path =
+                config::save(args.config.as_deref().or(Some(loaded.path.as_path())), &cfg)?;
 
             if init.apply {
+                if !args.json {
+                    println!("Wrote {}", saved_path.display());
+                }
                 let state = command_state(args.dry_run)?;
                 let report = reconciler::apply(
                     &cfg,
@@ -51,6 +54,12 @@ fn run() -> Result<u8> {
                 )?;
                 output_report(args.json, args.dry_run, &report);
                 return Ok(report.exit_code());
+            }
+
+            if args.json {
+                println!("{}", serde_json::json!({ "config_path": saved_path }));
+            } else {
+                println!("Wrote {}", saved_path.display());
             }
 
             Ok(0)
