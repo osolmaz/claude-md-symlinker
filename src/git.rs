@@ -64,14 +64,20 @@ pub fn is_tracked(repo: &GitRepo, rel_path: &Path) -> Result<bool> {
     Ok(status.success())
 }
 
-pub fn set_global_excludes_file(path: &Path) -> Result<()> {
-    if let Some(existing) = global_config_value("core.excludesFile")?
-        && Path::new(existing.trim()) != path
-    {
+pub fn ensure_global_excludes_file(path: &Path, dry_run: bool) -> Result<bool> {
+    if let Some(existing) = global_config_value("core.excludesFile")? {
+        if Path::new(existing.trim()) == path {
+            return Ok(false);
+        }
+
         bail!(
             "global core.excludesFile is already set to {}; refusing to overwrite it",
             existing.trim()
         );
+    }
+
+    if dry_run {
+        return Ok(true);
     }
 
     let status = Command::new("git")
@@ -85,7 +91,7 @@ pub fn set_global_excludes_file(path: &Path) -> Result<()> {
     if !status.success() {
         bail!("git config --global core.excludesFile failed");
     }
-    Ok(())
+    Ok(true)
 }
 
 fn global_config_value(key: &str) -> Result<Option<String>> {

@@ -1,4 +1,7 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Component, Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -306,7 +309,7 @@ fn symlink_points_to(target: &Path, source: &Path) -> Result<bool> {
         target.parent().unwrap_or(Path::new(".")).join(link)
     };
 
-    if resolved == source {
+    if paths_match_lexically(&resolved, source) {
         return Ok(true);
     }
 
@@ -314,6 +317,28 @@ fn symlink_points_to(target: &Path, source: &Path) -> Result<bool> {
         (Ok(resolved), Ok(source)) => Ok(resolved == source),
         _ => Ok(false),
     }
+}
+
+fn paths_match_lexically(left: &Path, right: &Path) -> bool {
+    lexical_normalize(left) == lexical_normalize(right)
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+
+    normalized
 }
 
 fn create_parent_dir(path: &Path) -> Result<()> {

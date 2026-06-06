@@ -18,10 +18,8 @@ pub fn ensure(repo: &GitRepo, target_rel: &Path, mode: ExcludeMode, dry_run: boo
             let updated = ensure_entry_file(&path, &ignore_entry(target_rel), dry_run)?;
             let removed_unignore =
                 remove_entry_file(&repo.exclude_path, &unignore_entry(target_rel), dry_run)?;
-            if updated && !dry_run {
-                git::set_global_excludes_file(&path)?;
-            }
-            Ok(updated || removed_unignore)
+            let config_updated = git::ensure_global_excludes_file(&path, dry_run)?;
+            Ok(updated || removed_unignore || config_updated)
         }
     }
 }
@@ -40,7 +38,14 @@ fn ensure_file(path: &Path, target_rel: &Path, dry_run: bool) -> Result<bool> {
 }
 
 fn ensure_entry_file(path: &Path, entry: &str, dry_run: bool) -> Result<bool> {
-    let current = fs::read_to_string(path).unwrap_or_default();
+    let current = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read exclude file {}", path.display()));
+        }
+    };
     let next = upsert_managed_entry(&current, entry);
     if next == current {
         return Ok(false);

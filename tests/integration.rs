@@ -315,6 +315,30 @@ fn adapter_target_path_cannot_escape_repo_root() {
 }
 
 #[test]
+fn invalid_utf8_exclude_file_is_not_overwritten() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    let exclude = git_stdout(&repo, &["rev-parse", "--git-path", "info/exclude"]);
+    let exclude_path = path_from_git_output(&repo, &exclude);
+    let original = b"keep-this-rule\n\xff\n";
+    fs::write(&exclude_path, original).unwrap();
+
+    let report = reconciler::apply(
+        &fixture.config(),
+        false,
+        &[],
+        &fixture.state(),
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.errors, 1);
+    assert!(!repo.join("CLAUDE.md").exists());
+    assert_eq!(fs::read(exclude_path).unwrap(), original);
+}
+
+#[test]
 fn dry_run_reports_without_mutating_repo_or_state() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
@@ -486,6 +510,44 @@ fn apply_remove_if_managed_removes_stale_shim_and_exclude() {
     assert!(!repo.join("CLAUDE.md").exists());
     fs::write(repo.join("CLAUDE.md"), "new user claude\n").unwrap();
     assert_eq!(git_status(&repo, "CLAUDE.md"), "?? CLAUDE.md\n");
+}
+
+#[test]
+fn remove_if_managed_cleans_nested_relative_symlink_after_source_deletion() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    let mut config = fixture.config();
+    config.adapters.claude.target = PathBuf::from(".claude/CLAUDE.md");
+    config.adapters.claude.on_source_missing = SourceMissingBehavior::RemoveIfManaged;
+    let state = fixture.state();
+
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_link(repo.join(".claude/CLAUDE.md")).unwrap(),
+        PathBuf::from("../AGENTS.md")
+    );
+    fs::remove_file(repo.join("AGENTS.md")).unwrap();
+
+    let report = reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.cleaned, 1);
+    assert_eq!(report.summary.exclude_updates, 1);
+    assert!(fs::symlink_metadata(repo.join(".claude/CLAUDE.md")).is_err());
 }
 
 #[test]
@@ -829,6 +891,64 @@ fn cli_dry_run_clean_reads_existing_state_for_hardlinks() {
         String::from_utf8_lossy(&clean.stderr)
     );
     assert!(!repo.join("CLAUDE.md").exists());
+}
+
+#[test]
+fn global_mode_configures_preseeded_global_exclude_file() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    let config_path = fixture.root.path().join("config.toml");
+    let data_dir = fixture.data.path();
+    fs::write(
+        data_dir.join("git-excludes"),
+        "# claudectomy managed begin\n/CLAUDE.md\n# claudectomy managed end\n",
+    )
+    .unwrap();
+    fs::write(
+        &config_path,
+        format!(
+            "[scan]\nroots = [\"{}\"]\n\n[git]\nexclude_mode = \"global\"\n",
+            fixture.root.path().display()
+        ),
+    )
+    .unwrap();
+    let global_config = fixture.root.path().join("global-gitconfig");
+    let bin = env!("CARGO_BIN_EXE_claudectomy");
+
+    let apply = Command::new(bin)
+        .env("CLAUDECTOMY_DATA_DIR", data_dir)
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .args(["--config", config_path.to_str().unwrap(), "apply"])
+        .output()
+        .expect("apply runs");
+    assert!(
+        apply.status.success(),
+        "apply failed: {}\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+
+    let configured = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .args(["config", "--global", "--get", "core.excludesFile"])
+        .output()
+        .expect("git config reads");
+    assert!(configured.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&configured.stdout).trim(),
+        data_dir.join("git-excludes").to_string_lossy()
+    );
+
+    let status = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .arg("-C")
+        .arg(&repo)
+        .args(["status", "--short", "--", "CLAUDE.md"])
+        .output()
+        .expect("git status runs");
+    assert!(status.status.success());
+    assert_eq!(String::from_utf8_lossy(&status.stdout), "");
 }
 
 #[test]
