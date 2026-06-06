@@ -81,8 +81,8 @@ pub fn run(
                         Err(error) => tracing::warn!("watch error: {error}"),
                     }
                 }
-                if should_run
-                    && reload_and_run(
+                if should_run {
+                    reload_and_run(
                         &mut active,
                         &mut watcher,
                         &mut watched,
@@ -90,8 +90,7 @@ pub fn run(
                         cli_roots,
                         state,
                         dry_run,
-                    )?
-                {
+                    )?;
                     last_run = Instant::now();
                 }
             }
@@ -99,7 +98,7 @@ pub fn run(
                 tracing::warn!("watch error: {error}");
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if reload_and_run(
+                reload_and_run(
                     &mut active,
                     &mut watcher,
                     &mut watched,
@@ -107,9 +106,8 @@ pub fn run(
                     cli_roots,
                     state,
                     dry_run,
-                )? {
-                    last_run = Instant::now();
-                }
+                )?;
+                last_run = Instant::now();
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 anyhow::bail!("filesystem watcher disconnected");

@@ -1,13 +1,13 @@
 use std::{
     collections::BTreeSet,
-    fs,
-    path::{Component, Path},
+    env, fs,
+    path::{Component, Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
 
 use crate::{
-    config::{ExcludeMode, data_dir},
+    config::{ExcludeMode, data_dir, expand_tilde},
     git::{self, GitRepo},
 };
 
@@ -47,7 +47,7 @@ fn claudectomy_global_ignore_is_active(target_rel: &Path) -> Result<bool> {
     let Some(configured_path) = git::configured_global_excludes_file()? else {
         return Ok(false);
     };
-    if configured_path != claudectomy_global_path {
+    if normalized_path(&configured_path)? != normalized_path(&claudectomy_global_path)? {
         return Ok(false);
     }
 
@@ -65,6 +65,16 @@ fn claudectomy_global_ignore_is_active(target_rel: &Path) -> Result<bool> {
     };
     let entry = ignore_entry(target_rel);
     Ok(current.lines().any(|line| line.trim() == entry))
+}
+
+fn normalized_path(path: &Path) -> Result<PathBuf> {
+    let expanded = expand_tilde(path);
+    let absolute = if expanded.is_absolute() {
+        expanded
+    } else {
+        env::current_dir()?.join(expanded)
+    };
+    Ok(absolute.canonicalize().unwrap_or(absolute))
 }
 
 fn ensure_file(path: &Path, target_rel: &Path, dry_run: bool) -> Result<bool> {

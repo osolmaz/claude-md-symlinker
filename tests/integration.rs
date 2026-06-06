@@ -2240,6 +2240,74 @@ fn per_repo_mode_conflict_unignores_owned_global_exclude() {
 }
 
 #[test]
+fn per_repo_mode_unignores_owned_global_exclude_configured_with_tilde() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    fs::write(repo.join("CLAUDE.md"), "user-owned replacement\n").unwrap();
+
+    let home = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"));
+    let data_dir = tempfile::Builder::new()
+        .prefix(".claudectomy-global-")
+        .tempdir_in(&home)
+        .expect("home temp data dir");
+    let global_excludes = data_dir.path().join("git-excludes");
+    fs::write(
+        &global_excludes,
+        "# claudectomy managed begin\n/CLAUDE.md\n# claudectomy managed end\n",
+    )
+    .unwrap();
+    let tilde_excludes = format!(
+        "~/{}",
+        global_excludes
+            .strip_prefix(&home)
+            .unwrap()
+            .to_string_lossy()
+    );
+
+    let config_path = fixture.root.path().join("config.toml");
+    fs::write(
+        &config_path,
+        format!("[scan]\nroots = [\"{}\"]\n", fixture.root.path().display()),
+    )
+    .unwrap();
+    let global_config = fixture.root.path().join("global-gitconfig");
+    let configured = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .args(["config", "--global", "core.excludesFile", &tilde_excludes])
+        .output()
+        .expect("git config writes");
+    assert!(
+        configured.status.success(),
+        "git config failed: {}",
+        String::from_utf8_lossy(&configured.stderr)
+    );
+
+    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let conflict = Command::new(bin)
+        .env("CLAUDECTOMY_DATA_DIR", data_dir.path())
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .args(["--config", config_path.to_str().unwrap(), "apply"])
+        .output()
+        .expect("per-repo apply runs");
+    assert_eq!(conflict.status.code(), Some(2));
+
+    let status = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .arg("-C")
+        .arg(&repo)
+        .args(["status", "--short", "--", "CLAUDE.md"])
+        .output()
+        .expect("git status runs");
+    assert!(status.status.success());
+    assert_eq!(String::from_utf8_lossy(&status.stdout), "?? CLAUDE.md\n");
+
+    let exclude = fs::read_to_string(git_exclude_path(&repo)).unwrap();
+    assert!(exclude.lines().any(|line| line == "!/CLAUDE.md"));
+    assert!(!exclude.lines().any(|line| line == "/CLAUDE.md"));
+}
+
+#[test]
 fn clean_removes_stale_exclude_when_managed_target_was_already_deleted() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
