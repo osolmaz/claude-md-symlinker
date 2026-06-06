@@ -1,6 +1,6 @@
 # Claudectomy Implementation Plan
 
-Status: planning only. No implementation has started.
+Status: initial implementation in progress.
 
 ## Goal
 
@@ -170,7 +170,7 @@ Checks:
 - SQLite state can be opened.
 - Configured scan roots exist.
 - Symlink support is available in a temporary directory.
-- Global exclude mode, if enabled, is configured correctly.
+- Global exclude mode is reported as disabled if configured.
 - Enabled adapters do not target the same file in incompatible ways.
 
 ### `claudectomy clean`
@@ -215,7 +215,8 @@ exclude_dir_names = [
 
 [git]
 exclude_mode = "per_repo"
-# per_repo | global
+# per_repo
+# global is intentionally rejected until Git can support scoped global excludes
 
 [watch]
 enabled = true
@@ -280,6 +281,9 @@ materialization: auto
 Future adapters can be added without changing discovery, state, reporting, or
 watch behavior.
 
+Adapter source and target paths must be repository-relative, must not escape the
+repository root, and must not point inside `.git`.
+
 ## Repo Discovery
 
 Discovery must be opt-in by root and must avoid scanning the whole machine.
@@ -338,15 +342,14 @@ Rules:
 4. Update only the managed block.
 5. Do not create duplicate entries.
 6. In dry-run mode, report the planned change only.
+7. Escape Git ignore metacharacters so configured target paths are treated as
+   literal paths, not glob patterns.
 
-Optional global mode:
-
-```sh
-git config --global core.excludesFile <claudectomy-global-excludes>
-```
-
-Global mode should be explicit because it hides matching files in every Git
-repository on the machine.
+Global exclude mode is intentionally not part of the first production system.
+Git global excludes cannot be scoped to configured roots, so a global
+`CLAUDE.md` rule would hide user-owned files in repositories Claudectomy does
+not manage. If a future Git-compatible design can preserve root scoping, add it
+as an explicit opt-in mode with conflict cleanup for older local shims.
 
 ## Materialization
 
@@ -540,8 +543,10 @@ reconciler must not depend on a service being installed.
 5. No overwrites of unknown files.
 6. No destructive cleanup based only on database records.
 7. Dry-run must avoid all filesystem mutations.
-8. Errors in one repo must not stop the whole run unless config says fail-fast.
-9. Paths in reports should be clear enough to diagnose conflicts.
+8. Dry-run must still validate the same materialization preconditions as apply.
+9. Non-regular sources such as directories, FIFOs, and devices are errors.
+10. Errors in one repo must not stop the whole run unless config says fail-fast.
+11. Paths in reports should be clear enough to diagnose conflicts.
 
 ## Verification Plan
 
@@ -568,7 +573,10 @@ Core cases:
 17. Symlink failure falls back to managed copy in `auto` mode.
 18. Forced symlink mode reports an error if symlink creation fails.
 19. Scan roots and path filters are expanded and canonicalized.
-20. Watch mode triggers reconciliation after `AGENTS.md` changes.
+20. Configured target paths with Git ignore metacharacters are excluded
+    literally.
+21. Non-regular source files are rejected without blocking reconciliation.
+22. Watch mode triggers reconciliation after `AGENTS.md` changes.
 
 Manual smoke tests:
 
@@ -616,7 +624,7 @@ cargo run -- clean --dry-run
 
 - Resolve exclude file with Git.
 - Add managed exclude blocks.
-- Implement global exclude mode behind config.
+- Reject global exclude mode until it can preserve configured scan scope.
 - Test idempotency.
 
 ### Milestone 6: State
@@ -678,13 +686,11 @@ These are intentionally deferred:
 ## Open Decisions
 
 1. Whether `clean` should require `--confirm` for actual deletion.
-2. Whether global exclude mode should be implemented immediately or documented
-   as planned.
-3. Whether the default `init` scan roots should include only explicit user input
+2. Whether the default `init` scan roots should include only explicit user input
    or offer common suggestions.
-4. Whether Windows should prefer copy by default even when symlink support is
+3. Whether Windows should prefer copy by default even when symlink support is
    available.
-5. Whether `watch` should be included in the first release or land immediately
+4. Whether `watch` should be included in the first release or land immediately
    after `apply`, `doctor`, and `clean`.
 
 The architecture should support all of these choices without changing the core

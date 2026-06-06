@@ -1,0 +1,25 @@
+[package]
+name = "claudectomy"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Keep AGENTS.md canonical and generate local tool-specific agent instruction shims."
+repository = "https://github.com/dutifuldev/claudectomy"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+directories = "6.0"
+ignore = "0.4"
+notify = "6.1"
+pathdiff = "0.2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+same-file = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tempfile = "3.14"
+thiserror = "2.0"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
