@@ -2426,9 +2426,8 @@ fn global_mode_is_rejected_without_mutating_repo_or_global_config() {
         .output()
         .expect("apply runs");
     assert_eq!(apply.status.code(), Some(1));
-    let stdout = String::from_utf8_lossy(&apply.stdout);
-    assert!(stdout.contains("Errors 1."));
-    assert!(stdout.contains("global exclude mode is disabled"));
+    let stderr = String::from_utf8_lossy(&apply.stderr);
+    assert!(stderr.contains("global exclude mode is disabled"));
     assert!(!repo.join("CLAUDE.md").exists());
 
     let configured = Command::new("git")
@@ -2437,6 +2436,33 @@ fn global_mode_is_rejected_without_mutating_repo_or_global_config() {
         .output()
         .expect("git config reads");
     assert!(!configured.status.success());
+}
+
+#[test]
+fn global_mode_is_rejected_even_without_sources() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let config_path = fixture.root.path().join("config.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[scan]\nroots = [\"{}\"]\n\n[git]\nexclude_mode = \"global\"\n",
+            fixture.root.path().display()
+        ),
+    )
+    .unwrap();
+    let bin = env!("CARGO_BIN_EXE_claudectomy");
+
+    let apply = Command::new(bin)
+        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .args(["--config", config_path.to_str().unwrap(), "apply"])
+        .output()
+        .expect("apply runs");
+
+    assert_eq!(apply.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&apply.stderr);
+    assert!(stderr.contains("global exclude mode is disabled"));
+    assert!(!repo.join("CLAUDE.md").exists());
 }
 
 #[test]
@@ -2759,6 +2785,34 @@ fn clean_without_remove_flag_preserves_missing_managed_shim_ownership() {
 
     fs::write(repo.join("CLAUDE.md"), "new user claude\n").unwrap();
     assert_eq!(git_status(&repo, "CLAUDE.md"), "?? CLAUDE.md\n");
+}
+
+#[test]
+fn watch_disabled_exits_before_reconciling() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("watch-disabled.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[scan]\nroots = [\"{}\"]\n\n[watch]\nenabled = false\n",
+            fixture.root.path().display()
+        ),
+    )
+    .unwrap();
+    let bin = env!("CARGO_BIN_EXE_claudectomy");
+
+    let watch = Command::new(bin)
+        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .args(["--config", config_path.to_str().unwrap(), "watch"])
+        .output()
+        .expect("watch runs");
+
+    assert_eq!(watch.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&watch.stderr);
+    assert!(stderr.contains("watch is disabled in config"));
+    assert!(!repo.join("CLAUDE.md").exists());
 }
 
 #[test]

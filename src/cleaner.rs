@@ -25,6 +25,7 @@ pub fn clean(
     state: &State,
     options: CleanOptions,
 ) -> Result<Report> {
+    crate::exclude::validate_mode(config.git.exclude_mode)?;
     let scope = config.scan_scope(config_existed, cli_roots)?;
     let repos = discovery::discover(&scope)?;
     let adapters = adapters::enabled_adapters(config)?;

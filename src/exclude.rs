@@ -36,7 +36,14 @@ pub fn remove(repo: &GitRepo, target_rel: &Path, mode: ExcludeMode, dry_run: boo
     }
 }
 
-fn reject_global_mode() -> Result<bool> {
+pub fn validate_mode(mode: ExcludeMode) -> Result<()> {
+    match mode {
+        ExcludeMode::PerRepo => Ok(()),
+        ExcludeMode::Global => reject_global_mode(),
+    }
+}
+
+fn reject_global_mode<T>() -> Result<T> {
     bail!(
         "global exclude mode is disabled because Git global excludes cannot be scoped to configured roots; use per_repo"
     )

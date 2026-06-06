@@ -41,6 +41,7 @@ pub fn run(
 ) -> Result<()> {
     let config_path = loaded.path.clone();
     let mut active = active_config(loaded, cli_roots)?;
+    ensure_watch_enabled(&active.config)?;
     let options = RunOptions { dry_run, json };
 
     let (tx, rx) = mpsc::channel();
@@ -146,6 +147,7 @@ fn reload_and_run(
             return Ok(false);
         }
     };
+    ensure_watch_enabled(&next.config)?;
     sync_watches(
         watcher,
         watched,
@@ -313,6 +315,13 @@ fn has_excluded_dir_component(path: &Path, scope: &ScanScope) -> bool {
                 if name.to_str().is_some_and(|name| scope.exclude_dir_names.contains(name))
         )
     })
+}
+
+fn ensure_watch_enabled(config: &AppConfig) -> Result<()> {
+    if !config.watch.enabled {
+        anyhow::bail!("watch is disabled in config; set [watch] enabled = true");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

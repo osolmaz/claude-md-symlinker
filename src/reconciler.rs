@@ -24,6 +24,7 @@ pub fn apply(
     state: &State,
     options: ReconcileOptions,
 ) -> Result<Report> {
+    exclude::validate_mode(config.git.exclude_mode)?;
     let scope = config.scan_scope(config_existed, cli_roots)?;
     let repos = discovery::discover(&scope)?;
     let adapters = adapters::enabled_adapters(config)?;
