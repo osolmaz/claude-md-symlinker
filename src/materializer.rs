@@ -293,7 +293,9 @@ fn create_missing(
 
     match config.strategy {
         MaterializationStrategy::Symlink => {
-            if !dry_run {
+            if dry_run {
+                validate_kind_creation(repo, adapter, MaterializationKind::Symlink)?;
+            } else {
                 create_symlink(repo, adapter)?;
             }
             Ok(MaterializeOutcome {
@@ -302,7 +304,9 @@ fn create_missing(
             })
         }
         MaterializationStrategy::Copy => {
-            if !dry_run {
+            if dry_run {
+                validate_kind_creation(repo, adapter, MaterializationKind::Copy)?;
+            } else {
                 write_managed_copy(repo, adapter)?;
             }
             Ok(MaterializeOutcome {
@@ -311,7 +315,9 @@ fn create_missing(
             })
         }
         MaterializationStrategy::Hardlink => {
-            if !dry_run {
+            if dry_run {
+                validate_kind_creation(repo, adapter, MaterializationKind::Hardlink)?;
+            } else {
                 create_hardlink(repo, adapter)?;
             }
             Ok(MaterializeOutcome {
@@ -372,7 +378,9 @@ fn replace_with_kind(
     let target = repo.root.join(&adapter.target);
     validate_parent_dir(repo, &target)?;
 
-    if !dry_run {
+    if dry_run {
+        validate_kind_creation(repo, adapter, kind)?;
+    } else {
         if fs::symlink_metadata(&target).is_ok() {
             remove_file(&target)?;
         }
@@ -387,6 +395,49 @@ fn replace_with_kind(
         kind,
         changed: true,
     })
+}
+
+fn validate_kind_creation(
+    repo: &GitRepo,
+    adapter: &Adapter,
+    kind: MaterializationKind,
+) -> Result<()> {
+    let target = repo.root.join(&adapter.target);
+    validate_parent_dir(repo, &target)?;
+
+    match kind {
+        MaterializationKind::Symlink => validate_symlink_creation(repo, adapter),
+        MaterializationKind::Copy => validate_copy_creation(repo, adapter),
+        MaterializationKind::Hardlink => validate_hardlink_creation(repo, adapter),
+    }
+}
+
+fn validate_symlink_creation(repo: &GitRepo, adapter: &Adapter) -> Result<()> {
+    let dir = tempdir().context("failed to create symlink probe directory")?;
+    let probe = dir.path().join("target");
+    let relative_source = desired_symlink_target(repo, adapter);
+    symlink_file(&relative_source, &probe).with_context(|| {
+        format!(
+            "failed to symlink {}",
+            repo.root.join(&adapter.target).display()
+        )
+    })?;
+    Ok(())
+}
+
+fn validate_copy_creation(repo: &GitRepo, adapter: &Adapter) -> Result<()> {
+    managed_copy_bytes(repo, adapter)?;
+    Ok(())
+}
+
+fn validate_hardlink_creation(repo: &GitRepo, adapter: &Adapter) -> Result<()> {
+    required_source_path(repo, adapter)?;
+    let dir = tempdir().context("failed to create hardlink probe directory")?;
+    let source = dir.path().join("source");
+    let target = dir.path().join("target");
+    fs::write(&source, "probe").context("failed to write hardlink probe source")?;
+    fs::hard_link(&source, &target).context("failed to hardlink probe target")?;
+    Ok(())
 }
 
 fn remove_file(path: &Path) -> Result<()> {

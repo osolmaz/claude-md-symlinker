@@ -1471,6 +1471,55 @@ fn dry_run_reports_strategy_replacement_as_repair() {
     assert!(same_file::is_same_file(repo.join("AGENTS.md"), repo.join("CLAUDE.md")).unwrap());
 }
 
+#[test]
+fn dry_run_validates_forced_strategy_replacement() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let source_rel = deep_relative_path("source", 1300, "AGENTS.md");
+    let target_rel = deep_relative_path("target", 1300, "CLAUDE.md");
+    let Some(source_parent) = source_rel.parent() else {
+        panic!("source has parent");
+    };
+    let Some(target_parent) = target_rel.parent() else {
+        panic!("target has parent");
+    };
+    if fs::create_dir_all(repo.join(source_parent)).is_err()
+        || fs::create_dir_all(repo.join(target_parent)).is_err()
+    {
+        return;
+    }
+    fs::write(repo.join(&source_rel), "canonical instructions\n").unwrap();
+    let mut config = fixture.config();
+    config.adapters.claude.source = source_rel;
+    config.adapters.claude.target = target_rel.clone();
+    config.materialization.strategy = MaterializationStrategy::Copy;
+    let state = fixture.state();
+
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+    let target = repo.join(&target_rel);
+    let original = fs::read(&target).unwrap();
+
+    config.materialization.strategy = MaterializationStrategy::Symlink;
+    let report = reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: true },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.errors, 1);
+    assert_eq!(fs::read(&target).unwrap(), original);
+}
+
 #[cfg(unix)]
 #[test]
 fn dry_run_reports_unwritable_target_parent_error() {
