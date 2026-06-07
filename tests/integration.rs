@@ -3039,6 +3039,33 @@ fn service_install_rejects_option_like_unit_name() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn service_install_rejects_empty_service_basename() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            ".service",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("service unit name must include a name before `.service`"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn service_install_treats_empty_xdg_config_home_as_unset() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
@@ -3087,10 +3114,12 @@ fn service_install_rejects_control_characters_in_unit_values() {
     let unit_path = xdg_config_home
         .join("systemd/user")
         .join("claudemdeez-test.service");
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
     let bin = env!("CARGO_BIN_EXE_claudemdeez");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
         .args([
             "--config",
             config_path.to_str().unwrap(),
@@ -3111,6 +3140,48 @@ fn service_install_rejects_control_characters_in_unit_values() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn service_install_decodes_quoted_manager_xdg_config_home() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg config");
+    let unit_path = xdg_config_home
+        .join("systemd/user")
+        .join("claudemdeez-test.service");
+    let path = fake_systemctl_path(
+        &fixture,
+        &format!(
+            "#!/bin/sh\nif [ \"$2\" = \"show-environment\" ]; then echo \"XDG_CONFIG_HOME=$'{}'\"; exit 0; fi\nexit 0\n",
+            xdg_config_home.display()
+        ),
+    );
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(unit_path.to_str().unwrap()));
+    assert!(!stdout.contains("$'"));
+    assert!(!unit_path.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn service_install_rejects_systemd_unsafe_binary_path() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
@@ -3121,10 +3192,12 @@ fn service_install_rejects_systemd_unsafe_binary_path() {
         .join("systemd/user")
         .join("claudemdeez-test.service");
     let bin_path = fixture.root.path().join("bin/claude'mdeez");
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
     let bin = env!("CARGO_BIN_EXE_claudemdeez");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
         .args([
             "--config",
             config_path.to_str().unwrap(),
@@ -3228,10 +3301,12 @@ fn service_install_dry_run_does_not_write_unit() {
         .join("claudemdeez-test.service");
     let bin_path = fixture.root.path().join("bin/claudemdeez");
     let data_dir = fixture.root.path().join("data");
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
     let bin = env!("CARGO_BIN_EXE_claudemdeez");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
         .args([
             "--config",
             config_path.to_str().unwrap(),
@@ -3438,10 +3513,12 @@ fn service_install_dry_run_refuses_unmanaged_unit_conflict() {
 fn service_start_dry_run_requires_managed_unit() {
     let fixture = Fixture::new();
     let xdg_config_home = fixture.root.path().join("xdg-config");
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
     let bin = env!("CARGO_BIN_EXE_claudemdeez");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
         .args([
             "--dry-run",
             "service",

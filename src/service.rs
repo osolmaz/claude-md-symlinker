@@ -369,6 +369,10 @@ fn normalize_unit_name(name: &str) -> Result<String> {
     {
         bail!("service unit name contains unsupported characters: {trimmed}");
     }
+    let stem = trimmed.strip_suffix(".service").unwrap_or(trimmed);
+    if !stem.chars().any(|ch| ch.is_ascii_alphanumeric()) {
+        bail!("service unit name must include a name before `.service`");
+    }
     if trimmed.ends_with(".service") {
         Ok(trimmed.to_string())
     } else {
@@ -405,18 +409,117 @@ fn manager_user_config_dir() -> Result<Option<PathBuf>> {
     let mut home = None;
     for line in text.lines() {
         if let Some(value) = line.strip_prefix("XDG_CONFIG_HOME=")
-            && !value.is_empty()
+            && let Some(path) = manager_env_path(value)?
         {
-            return Ok(Some(absolute_expanded_path(Path::new(value))?));
+            return Ok(Some(path));
         }
-        if let Some(value) = line.strip_prefix("HOME=")
-            && !value.is_empty()
-        {
-            home = Some(absolute_expanded_path(Path::new(value))?);
+        if let Some(value) = line.strip_prefix("HOME=") {
+            home = manager_env_path(value)?;
         }
     }
 
     Ok(home.map(|path| path.join(".config")))
+}
+
+fn manager_env_path(value: &str) -> Result<Option<PathBuf>> {
+    let decoded = decode_systemctl_env_value(value)?;
+    if decoded.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(absolute_expanded_path(Path::new(&decoded))?))
+}
+
+fn decode_systemctl_env_value(value: &str) -> Result<String> {
+    if let Some(inner) = value
+        .strip_prefix("$'")
+        .and_then(|value| value.strip_suffix('\''))
+    {
+        return decode_ansi_c_quoted(inner);
+    }
+    if let Some(inner) = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+    {
+        return Ok(decode_double_quoted(inner));
+    }
+    if let Some(inner) = value
+        .strip_prefix('\'')
+        .and_then(|value| value.strip_suffix('\''))
+    {
+        return Ok(inner.to_string());
+    }
+    Ok(value.to_string())
+}
+
+fn decode_double_quoted(value: &str) -> String {
+    let mut decoded = String::new();
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                decoded.push(next);
+            }
+        } else {
+            decoded.push(ch);
+        }
+    }
+    decoded
+}
+
+fn decode_ansi_c_quoted(value: &str) -> Result<String> {
+    let mut decoded = String::new();
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            decoded.push(ch);
+            continue;
+        }
+
+        let Some(escaped) = chars.next() else {
+            decoded.push('\\');
+            break;
+        };
+        match escaped {
+            'a' => decoded.push('\x07'),
+            'b' => decoded.push('\x08'),
+            'f' => decoded.push('\x0c'),
+            'n' => decoded.push('\n'),
+            'r' => decoded.push('\r'),
+            't' => decoded.push('\t'),
+            'v' => decoded.push('\x0b'),
+            '\\' => decoded.push('\\'),
+            '\'' => decoded.push('\''),
+            '"' => decoded.push('"'),
+            'x' => {
+                let mut hex = String::new();
+                for _ in 0..2 {
+                    if chars.peek().is_some_and(|ch| ch.is_ascii_hexdigit()) {
+                        hex.push(chars.next().expect("peeked hex digit"));
+                    }
+                }
+                if hex.is_empty() {
+                    decoded.push('x');
+                } else {
+                    let value = u8::from_str_radix(&hex, 16)
+                        .context("failed to decode systemctl environment hex escape")?;
+                    decoded.push(value as char);
+                }
+            }
+            '0'..='7' => {
+                let mut octal = String::from(escaped);
+                for _ in 0..2 {
+                    if chars.peek().is_some_and(|ch| matches!(ch, '0'..='7')) {
+                        octal.push(chars.next().expect("peeked octal digit"));
+                    }
+                }
+                let value = u8::from_str_radix(&octal, 8)
+                    .context("failed to decode systemctl environment octal escape")?;
+                decoded.push(value as char);
+            }
+            other => decoded.push(other),
+        }
+    }
+    Ok(decoded)
 }
 
 fn process_user_config_dir() -> Result<PathBuf> {
@@ -732,8 +835,8 @@ mod tests {
 
     use super::{
         MANAGED_MARKER, UnitSpec, build_unit, current_user_can_write_directory,
-        ensure_existing_unit_is_managed_or_absent, ensure_service_scan_paths_are_absolute,
-        is_managed_unit, normalize_unit_name,
+        decode_systemctl_env_value, ensure_existing_unit_is_managed_or_absent,
+        ensure_service_scan_paths_are_absolute, is_managed_unit, normalize_unit_name,
     };
     use crate::config::AppConfig;
 
@@ -750,6 +853,8 @@ mod tests {
         assert!(normalize_unit_name("-bad").is_err());
         assert!(normalize_unit_name("../bad").is_err());
         assert!(normalize_unit_name("bad name").is_err());
+        assert!(normalize_unit_name(".service").is_err());
+        assert!(normalize_unit_name(".").is_err());
     }
 
     #[test]
@@ -848,6 +953,22 @@ mod tests {
 
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(current_user_can_write_directory(&directory).unwrap());
+    }
+
+    #[test]
+    fn systemctl_environment_values_are_decoded() {
+        assert_eq!(
+            decode_systemctl_env_value("$'/tmp/with space'").unwrap(),
+            "/tmp/with space"
+        );
+        assert_eq!(
+            decode_systemctl_env_value("$'/tmp/with\\x20hex'").unwrap(),
+            "/tmp/with hex"
+        );
+        assert_eq!(
+            decode_systemctl_env_value("\"/tmp/with\\\"quote\"").unwrap(),
+            "/tmp/with\"quote"
+        );
     }
 
     #[test]
