@@ -385,6 +385,12 @@ fn normalize_unit_name(name: &str) -> Result<String> {
     if !stem.chars().any(|ch| ch.is_ascii_alphanumeric()) {
         bail!("service unit name must include a name before `.service`");
     }
+    let template_parts = stem.matches('@').count();
+    if stem.starts_with('@') || stem.ends_with('@') || template_parts > 1 {
+        bail!(
+            "service unit name must be a plain service name or an instantiated name like `name@instance.service`"
+        );
+    }
     if trimmed.ends_with(".service") {
         Ok(trimmed.to_string())
     } else {
@@ -1034,6 +1040,13 @@ mod tests {
         assert!(normalize_unit_name("bad name").is_err());
         assert!(normalize_unit_name(".service").is_err());
         assert!(normalize_unit_name(".").is_err());
+        assert!(normalize_unit_name("@bad").is_err());
+        assert!(normalize_unit_name("bad@").is_err());
+        assert!(normalize_unit_name("bad@@name").is_err());
+        assert_eq!(
+            normalize_unit_name("claudemdeez@work").unwrap(),
+            "claudemdeez@work.service"
+        );
     }
 
     #[test]
