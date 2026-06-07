@@ -5100,6 +5100,7 @@ fn install_service_rejects_symlinked_unit_path() {
         .arg("--unit-name")
         .arg("claude-md-symlinker-symlink-test")
         .env("HOME", &home)
+        .env("CLAUDE_MD_SYMLINKER_SYSTEMD_USER_DIR", &unit_dir)
         .env("CLAUDE_MD_SYMLINKER_SYSTEMCTL", &fake)
         .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
         .output()
