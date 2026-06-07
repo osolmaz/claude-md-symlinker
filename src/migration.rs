@@ -278,35 +278,25 @@ fn apply_migration(
         bail!("sibling AGENTS.md already exists");
     }
 
-    if git::is_tracked(&repo, claude_rel)? && options.git_add {
-        git_mv(&repo.root, claude_rel, agents_rel, options.replace_existing)?;
-        fs::write(&candidate.agents_path, rewritten)
-            .with_context(|| format!("failed to write {}", candidate.agents_path.display()))?;
-        git_add(&repo.root, agents_rel)?;
-    } else {
-        let tmp = candidate.agents_path.with_extension("md.tmp");
-        fs::write(&tmp, rewritten).with_context(|| format!("failed to write {}", tmp.display()))?;
-        fs::rename(&tmp, &candidate.agents_path).with_context(|| {
-            format!(
-                "failed to move {} to {}",
-                tmp.display(),
-                candidate.agents_path.display()
-            )
-        })?;
-        fs::remove_file(&candidate.claude_path)
-            .with_context(|| format!("failed to remove {}", candidate.claude_path.display()))?;
-        if options.git_add {
-            git_add(&repo.root, agents_rel)?;
-        }
-    }
-
-    let verified = fs::read_to_string(&candidate.agents_path)
-        .with_context(|| format!("failed to verify {}", candidate.agents_path.display()))?;
-    if verified != rewritten {
-        bail!(
-            "verification failed after writing {}",
+    let claude_tracked = git::is_tracked(&repo, claude_rel)?;
+    let tmp = candidate.agents_path.with_extension("md.tmp");
+    fs::write(&tmp, rewritten).with_context(|| format!("failed to write {}", tmp.display()))?;
+    verify_file_contents(&tmp, rewritten)?;
+    fs::rename(&tmp, &candidate.agents_path).with_context(|| {
+        format!(
+            "failed to move {} to {}",
+            tmp.display(),
             candidate.agents_path.display()
-        );
+        )
+    })?;
+    verify_file_contents(&candidate.agents_path, rewritten)?;
+    fs::remove_file(&candidate.claude_path)
+        .with_context(|| format!("failed to remove {}", candidate.claude_path.display()))?;
+    if options.git_add {
+        git_add(&repo.root, agents_rel)?;
+        if claude_tracked {
+            git_add(&repo.root, claude_rel)?;
+        }
     }
 
     reconciler::apply_instruction_dir(
@@ -318,12 +308,13 @@ fn apply_migration(
     Ok(())
 }
 
-fn git_mv(repo: &Path, from: &Path, to: &Path, replace_existing: bool) -> Result<()> {
-    if replace_existing {
-        git_command(repo, &["mv", "-f", "--"], &[from, to])
-    } else {
-        git_command(repo, &["mv", "--"], &[from, to])
+fn verify_file_contents(path: &Path, expected: &str) -> Result<()> {
+    let verified =
+        fs::read_to_string(path).with_context(|| format!("failed to verify {}", path.display()))?;
+    if verified != expected {
+        bail!("verification failed after writing {}", path.display());
     }
+    Ok(())
 }
 
 fn git_add(repo: &Path, path: &Path) -> Result<()> {

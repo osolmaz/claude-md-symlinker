@@ -170,18 +170,12 @@ pub struct SettingsGetArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct PurgeArgs {
-    #[arg(long)]
-    pub yes: bool,
-}
+pub struct PurgeArgs {}
 
 #[derive(Debug, Args)]
 pub struct UninstallArgs {
     #[arg(long)]
     pub purge: bool,
-
-    #[arg(long)]
-    pub yes: bool,
 
     #[arg(long)]
     pub no_service: bool,

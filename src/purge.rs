@@ -25,8 +25,7 @@ pub struct PurgeItem {
     pub reason: String,
 }
 
-pub fn run(args: &PurgeArgs, state: &State, dry_run: bool, json: bool) -> Result<u8> {
-    let _ = args.yes;
+pub fn run(_args: &PurgeArgs, state: &State, dry_run: bool, json: bool) -> Result<u8> {
     let report = purge(state, dry_run)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
