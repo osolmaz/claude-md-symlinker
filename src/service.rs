@@ -79,6 +79,7 @@ fn install(
 
     let spec = install_spec(args, loaded)?;
     ensure_existing_unit_is_managed_or_absent(&spec.unit_path)?;
+    ensure_unit_name_is_available(&spec, false)?;
     validate_unit_path_writable(&spec.unit_path)?;
     let unit = build_unit(&spec);
 
@@ -98,6 +99,7 @@ fn install(
 
     ensure_systemd_user_available()?;
     ensure_existing_unit_is_managed_or_absent(&spec.unit_path)?;
+    ensure_unit_name_is_available(&spec, true)?;
     validate_unit_path_writable(&spec.unit_path)?;
 
     if let Some(parent) = spec.unit_path.parent() {
@@ -544,6 +546,15 @@ fn validate_systemd_command_path(path: &Path) -> Result<()> {
             path.display()
         );
     }
+
+    let metadata = fs::metadata(path)
+        .with_context(|| format!("failed to inspect service binary {}", path.display()))?;
+    if !metadata.is_file() {
+        bail!("service binary path is not a file: {}", path.display());
+    }
+    if !current_user_can_execute(path)? {
+        bail!("service binary path is not executable: {}", path.display());
+    }
     Ok(())
 }
 
@@ -585,6 +596,62 @@ fn ensure_managed_unit_installed(unit_path: &Path) -> Result<()> {
         return Ok(());
     }
     bail!("managed systemd user unit is not installed; run `claudemdeez service install` first");
+}
+
+fn ensure_unit_name_is_available(spec: &UnitSpec, require_systemd: bool) -> Result<()> {
+    let Some(fragment_path) = manager_unit_fragment_path(&spec.unit_name, require_systemd)? else {
+        return Ok(());
+    };
+    if paths_match(&fragment_path, &spec.unit_path) {
+        return Ok(());
+    }
+    bail!(
+        "refusing to shadow existing systemd user unit {} at {}",
+        spec.unit_name,
+        fragment_path.display()
+    );
+}
+
+fn manager_unit_fragment_path(unit_name: &str, require_systemd: bool) -> Result<Option<PathBuf>> {
+    let output = match Command::new("systemctl")
+        .arg("--user")
+        .arg("show")
+        .arg(unit_name)
+        .arg("--property=LoadState")
+        .arg("--property=FragmentPath")
+        .arg("--value")
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if !require_systemd => return Ok(None),
+        Err(error) => {
+            bail!("failed to query systemd user unit {unit_name}: {error}");
+        }
+    };
+    if !output.status.success() {
+        if require_systemd {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!(
+                "systemctl --user show {unit_name} failed: {}",
+                stderr.trim()
+            );
+        }
+        return Ok(None);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+    let load_state = lines.next().unwrap_or_default().trim();
+    let fragment_path = lines.next().unwrap_or_default().trim();
+    if load_state.is_empty() || load_state == "not-found" {
+        return Ok(None);
+    }
+    if fragment_path.is_empty() {
+        bail!(
+            "refusing to shadow existing systemd user unit {unit_name} with load state {load_state}"
+        );
+    }
+    Ok(Some(PathBuf::from(fragment_path)))
 }
 
 fn existing_managed_unit(unit_path: &Path) -> Result<Option<String>> {
@@ -691,6 +758,19 @@ fn current_user_can_write(path: &Path) -> Result<bool> {
     }
 }
 
+fn current_user_can_execute(path: &Path) -> Result<bool> {
+    #[cfg(unix)]
+    {
+        const X_OK: i32 = 1;
+        current_user_can_access(path, X_OK)
+    }
+
+    #[cfg(not(unix))]
+    {
+        Ok(fs::metadata(path)?.is_file())
+    }
+}
+
 fn current_user_can_write_directory(path: &Path) -> Result<bool> {
     #[cfg(unix)]
     {
@@ -718,6 +798,17 @@ fn current_user_can_access(path: &Path, mode: i32) -> Result<bool> {
         )
     })?;
     Ok(unsafe { access(path.as_ptr(), mode) == 0 })
+}
+
+fn paths_match(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+
+    let (Ok(left), Ok(right)) = (left.canonicalize(), right.canonicalize()) else {
+        return false;
+    };
+    left == right
 }
 
 fn nearest_existing_ancestor(mut path: &Path) -> Option<&Path> {
