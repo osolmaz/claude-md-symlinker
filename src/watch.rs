@@ -341,7 +341,7 @@ mod tests {
         let root = PathBuf::from("/workspace");
         let scope = scope(root.clone());
         let adapters = adapters();
-        let config_path = PathBuf::from("/home/user/.config/claudemdeez/config.toml");
+        let config_path = PathBuf::from("/home/user/.config/claude-md-symlinker/config.toml");
 
         assert!(event_is_relevant(
             &event(root.join("repo/AGENTS.md")),
@@ -381,7 +381,7 @@ mod tests {
         let mut scope = scope(root.clone());
         scope.exclude_paths = vec![root.join("archive")];
         let adapters = adapters();
-        let config_path = PathBuf::from("/home/user/.config/claudemdeez/config.toml");
+        let config_path = PathBuf::from("/home/user/.config/claude-md-symlinker/config.toml");
 
         assert!(!event_is_relevant(
             &event(root.join("repo/src/main.rs")),
@@ -428,7 +428,7 @@ mod tests {
         let root = PathBuf::from("/workspace");
         let scope = scope(root.clone());
         let config_dir = tempfile::tempdir().unwrap();
-        let config_path = config_dir.path().join("claudemdeez.toml");
+        let config_path = config_dir.path().join("claude-md-symlinker.toml");
 
         let targets = desired_watch_targets(&scope, &config_path);
 

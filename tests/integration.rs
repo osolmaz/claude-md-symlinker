@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use claudemdeez::{
+use claude_md_symlinker::{
     cleaner::{self, CleanOptions},
     config::{AppConfig, MaterializationStrategy, SourceMissingBehavior},
     reconciler::{self, ReconcileOptions},
@@ -882,9 +882,9 @@ fn fifo_source_is_rejected_without_hanging() {
         format!("[scan]\nroots = [\"{}\"]\n", fixture.root.path().display()),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
     let child = Command::new(bin)
-        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
         .args(["--config", config_path.to_str().unwrap(), "apply"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1026,7 +1026,7 @@ fn copy_materialization_refreshes_managed_copy() {
 
     assert_eq!(report.summary.refreshed, 1);
     let text = fs::read_to_string(repo.join("CLAUDE.md")).unwrap();
-    assert!(text.contains("claudemdeez managed"));
+    assert!(text.contains("claude-md-symlinker managed"));
     assert!(text.ends_with("v2\n"));
 }
 
@@ -1264,7 +1264,7 @@ fn explicit_copy_strategy_replaces_existing_managed_symlink() {
             .is_symlink()
     );
     let text = fs::read_to_string(repo.join("CLAUDE.md")).unwrap();
-    assert!(text.contains("claudemdeez managed"));
+    assert!(text.contains("claude-md-symlinker managed"));
     assert!(text.ends_with("canonical instructions\n"));
 }
 
@@ -2343,10 +2343,10 @@ fn cli_dry_run_clean_does_not_remove_stale_hardlinks_by_state() {
         ),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let apply = Command::new(bin)
-        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
         .args(["--config", config_path.to_str().unwrap(), "apply"])
         .output()
         .expect("apply runs");
@@ -2358,7 +2358,7 @@ fn cli_dry_run_clean_does_not_remove_stale_hardlinks_by_state() {
     fs::remove_file(repo.join("AGENTS.md")).unwrap();
 
     let dry_run = Command::new(bin)
-        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
         .args([
             "--dry-run",
             "--json",
@@ -2380,7 +2380,7 @@ fn cli_dry_run_clean_does_not_remove_stale_hardlinks_by_state() {
     assert!(repo.join("CLAUDE.md").exists());
 
     let clean = Command::new(bin)
-        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
         .args([
             "--config",
             config_path.to_str().unwrap(),
@@ -2401,7 +2401,7 @@ fn cli_dry_run_clean_does_not_remove_stale_hardlinks_by_state() {
 fn cli_dry_run_init_does_not_write_config() {
     let fixture = Fixture::new();
     let config_path = fixture.root.path().join("dry-run-config.toml");
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let dry_run = Command::new(bin)
         .args([
@@ -2459,10 +2459,10 @@ fn global_mode_is_rejected_without_mutating_repo_or_global_config() {
     )
     .unwrap();
     let global_config = fixture.root.path().join("global-gitconfig");
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let apply = Command::new(bin)
-        .env("CLAUDEMDEEZ_DATA_DIR", data_dir)
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", data_dir)
         .env("GIT_CONFIG_GLOBAL", &global_config)
         .args(["--config", config_path.to_str().unwrap(), "apply"])
         .output()
@@ -2493,10 +2493,10 @@ fn global_mode_is_rejected_even_without_sources() {
         ),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let apply = Command::new(bin)
-        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
         .args(["--config", config_path.to_str().unwrap(), "apply"])
         .output()
         .expect("apply runs");
@@ -2519,10 +2519,10 @@ fn doctor_fails_when_global_mode_is_configured() {
         ),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let doctor = Command::new(bin)
-        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
         .args(["--config", config_path.to_str().unwrap(), "doctor"])
         .output()
         .expect("doctor runs");
@@ -2542,10 +2542,10 @@ fn doctor_dry_run_does_not_create_state() {
         format!("[scan]\nroots = [\"{}\"]\n", fixture.root.path().display()),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let doctor = Command::new(bin)
-        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
         .args([
             "--dry-run",
             "--config",
@@ -2571,12 +2571,12 @@ fn per_repo_mode_conflict_unignores_owned_global_exclude() {
     let config_path = fixture.root.path().join("config.toml");
     let data_dir = fixture.data.path();
     let global_config = fixture.root.path().join("global-gitconfig");
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     fs::write(repo.join("CLAUDE.md"), "user-owned replacement\n").unwrap();
     fs::write(
         data_dir.join("git-excludes"),
-        "# claudemdeez managed begin\n/CLAUDE.md\n# claudemdeez managed end\n",
+        "# claude-md-symlinker managed begin\n/CLAUDE.md\n# claude-md-symlinker managed end\n",
     )
     .unwrap();
     let configured = Command::new("git")
@@ -2601,7 +2601,7 @@ fn per_repo_mode_conflict_unignores_owned_global_exclude() {
     )
     .unwrap();
     let conflict = Command::new(bin)
-        .env("CLAUDEMDEEZ_DATA_DIR", data_dir)
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", data_dir)
         .env("GIT_CONFIG_GLOBAL", &global_config)
         .args(["--config", config_path.to_str().unwrap(), "apply"])
         .output()
@@ -2632,13 +2632,13 @@ fn per_repo_mode_unignores_owned_global_exclude_configured_with_tilde() {
 
     let home = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"));
     let data_dir = tempfile::Builder::new()
-        .prefix(".claudemdeez-global-")
+        .prefix(".claude-md-symlinker-global-")
         .tempdir_in(&home)
         .expect("home temp data dir");
     let global_excludes = data_dir.path().join("git-excludes");
     fs::write(
         &global_excludes,
-        "# claudemdeez managed begin\n/CLAUDE.md\n# claudemdeez managed end\n",
+        "# claude-md-symlinker managed begin\n/CLAUDE.md\n# claude-md-symlinker managed end\n",
     )
     .unwrap();
     let tilde_excludes = format!(
@@ -2667,9 +2667,9 @@ fn per_repo_mode_unignores_owned_global_exclude_configured_with_tilde() {
         String::from_utf8_lossy(&configured.stderr)
     );
 
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
     let conflict = Command::new(bin)
-        .env("CLAUDEMDEEZ_DATA_DIR", data_dir.path())
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", data_dir.path())
         .env("GIT_CONFIG_GLOBAL", &global_config)
         .args(["--config", config_path.to_str().unwrap(), "apply"])
         .output()
@@ -2704,7 +2704,7 @@ fn per_repo_mode_unignores_owned_global_exclude_with_escaped_trailing_space() {
     let data_dir = fixture.data.path();
     fs::write(
         data_dir.join("git-excludes"),
-        "# claudemdeez managed begin\n/CLAUDE.md\\ \n# claudemdeez managed end\n",
+        "# claude-md-symlinker managed begin\n/CLAUDE.md\\ \n# claude-md-symlinker managed end\n",
     )
     .unwrap();
     let global_config = fixture.root.path().join("global-gitconfig");
@@ -2724,9 +2724,9 @@ fn per_repo_mode_unignores_owned_global_exclude_with_escaped_trailing_space() {
         String::from_utf8_lossy(&configured.stderr)
     );
 
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
     let conflict = Command::new(bin)
-        .env("CLAUDEMDEEZ_DATA_DIR", data_dir)
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", data_dir)
         .env("GIT_CONFIG_GLOBAL", &global_config)
         .args(["--config", config_path.to_str().unwrap(), "apply"])
         .output()
@@ -2843,10 +2843,10 @@ fn watch_disabled_exits_before_reconciling() {
         ),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let watch = Command::new(bin)
-        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
         .args(["--config", config_path.to_str().unwrap(), "watch"])
         .output()
         .expect("watch runs");
@@ -2866,10 +2866,10 @@ fn watch_reloads_config_and_updates_watched_roots() {
     fs::write(second_repo.join("AGENTS.md"), "second\n").unwrap();
     let config_path = fixture.root.path().join("watch-config.toml");
     write_config_roots(&config_path, &[&first_repo]);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let mut child = Command::new(bin)
-        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
         .current_dir(fixture.root.path())
         .args(["--config", "watch-config.toml", "watch"])
         .stdout(Stdio::null())
@@ -2908,10 +2908,10 @@ fn watch_honors_json_output_flag() {
     fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
     let config_path = fixture.root.path().join("watch-json.toml");
     write_config_roots(&config_path, &[&repo]);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let mut child = Command::new(bin)
-        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
         .args([
             "--dry-run",
             "--json",
@@ -2964,7 +2964,7 @@ fn service_install_requires_configured_roots() {
     let fixture = Fixture::new();
     let config_path = fixture.root.path().join("service-empty.toml");
     fs::write(&config_path, "[scan]\nroots = []\n").unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .args([
@@ -2974,7 +2974,7 @@ fn service_install_requires_configured_roots() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service install runs");
@@ -2990,7 +2990,7 @@ fn service_install_rejects_relative_scan_paths() {
     let fixture = Fixture::new();
     let config_path = fixture.root.path().join("service-relative.toml");
     fs::write(&config_path, "[scan]\nroots = [\".\"]\n").unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .current_dir(fixture.root.path())
@@ -3001,7 +3001,7 @@ fn service_install_rejects_relative_scan_paths() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service install runs");
@@ -3018,7 +3018,7 @@ fn service_install_rejects_option_like_unit_name() {
     let repo = fixture.repo("repo");
     let config_path = fixture.root.path().join("service.toml");
     write_config_roots(&config_path, &[&repo]);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .args([
@@ -3044,7 +3044,7 @@ fn service_install_rejects_empty_service_basename() {
     let repo = fixture.repo("repo");
     let config_path = fixture.root.path().join("service.toml");
     write_config_roots(&config_path, &[&repo]);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .args([
@@ -3074,7 +3074,7 @@ fn service_install_treats_empty_xdg_config_home_as_unset() {
     let home = fixture.root.path().join("home");
     fs::create_dir_all(&home).unwrap();
     let path = fake_systemctl_path_failing_show_env(&fixture);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", "")
@@ -3087,7 +3087,7 @@ fn service_install_treats_empty_xdg_config_home_as_unset() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service install dry-run runs");
@@ -3096,7 +3096,7 @@ fn service_install_treats_empty_xdg_config_home_as_unset() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(
-            home.join(".config/systemd/user/claudemdeez-test.service")
+            home.join(".config/systemd/user/claude-md-symlinker-test.service")
                 .to_str()
                 .unwrap()
         )
@@ -3113,9 +3113,9 @@ fn service_install_rejects_control_characters_in_unit_values() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_path = xdg_config_home
         .join("systemd/user")
-        .join("claudemdeez-test.service");
+        .join("claude-md-symlinker-test.service");
     let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3127,7 +3127,7 @@ fn service_install_rejects_control_characters_in_unit_values() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service install dry-run runs");
@@ -3149,7 +3149,7 @@ fn service_install_uses_manager_unit_path_with_escaped_spaces() {
     let xdg_config_home = fixture.root.path().join("xdg config");
     let unit_path = xdg_config_home
         .join("systemd/user")
-        .join("claudemdeez-test.service");
+        .join("claude-md-symlinker-test.service");
     let unit_path_token = systemd_show_path_token(&xdg_config_home);
     let path = fake_systemctl_path(
         &fixture,
@@ -3157,7 +3157,7 @@ fn service_install_uses_manager_unit_path_with_escaped_spaces() {
             "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{unit_path_token}/systemd/user.control /run/user/1000/systemd/user.control {unit_path_token}/systemd/user /etc/systemd/user\"; exit 0; fi\nif [ \"$2\" = \"show\" ]; then printf '%s\\n\\n' not-found; exit 0; fi\nexit 0\n"
         ),
     );
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("PATH", path)
@@ -3168,7 +3168,7 @@ fn service_install_uses_manager_unit_path_with_escaped_spaces() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service install dry-run runs");
@@ -3190,10 +3190,10 @@ fn service_install_rejects_systemd_unsafe_binary_path() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_path = xdg_config_home
         .join("systemd/user")
-        .join("claudemdeez-test.service");
-    let bin_path = fixture.root.path().join("bin/claude'mdeez");
+        .join("claude-md-symlinker-test.service");
+    let bin_path = fixture.root.path().join("bin/claude-md-symlinker'bad");
     let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3205,7 +3205,7 @@ fn service_install_rejects_systemd_unsafe_binary_path() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
             "--bin",
             bin_path.to_str().unwrap(),
         ])
@@ -3228,10 +3228,10 @@ fn service_install_rejects_missing_binary_path() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_path = xdg_config_home
         .join("systemd/user")
-        .join("claudemdeez-test.service");
-    let bin_path = fixture.root.path().join("bin/missing-claudemdeez");
+        .join("claude-md-symlinker-test.service");
+    let bin_path = fixture.root.path().join("bin/missing-claude-md-symlinker");
     let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3243,7 +3243,7 @@ fn service_install_rejects_missing_binary_path() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
             "--bin",
             bin_path.to_str().unwrap(),
         ])
@@ -3268,13 +3268,13 @@ fn service_install_rejects_non_executable_binary_path() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_path = xdg_config_home
         .join("systemd/user")
-        .join("claudemdeez-test.service");
-    let bin_path = fixture.root.path().join("bin/claudemdeez");
+        .join("claude-md-symlinker-test.service");
+    let bin_path = fixture.root.path().join("bin/claude-md-symlinker");
     fs::create_dir_all(bin_path.parent().unwrap()).unwrap();
     fs::write(&bin_path, "#!/bin/sh\n").unwrap();
     fs::set_permissions(&bin_path, fs::Permissions::from_mode(0o644)).unwrap();
     let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3286,7 +3286,7 @@ fn service_install_rejects_non_executable_binary_path() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
             "--bin",
             bin_path.to_str().unwrap(),
         ])
@@ -3310,23 +3310,23 @@ fn service_install_dry_run_refuses_unit_lookup_conflict() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_path = xdg_config_home
         .join("systemd/user")
-        .join("claudemdeez-test.service");
+        .join("claude-md-symlinker-test.service");
     let unit_path_token = systemd_show_path_token(&xdg_config_home);
     let existing_unit = fixture
         .root
         .path()
-        .join("usr/lib/systemd/user/claudemdeez-test.service");
+        .join("usr/lib/systemd/user/claude-md-symlinker-test.service");
     fs::create_dir_all(existing_unit.parent().unwrap()).unwrap();
     fs::write(&existing_unit, "[Service]\nExecStart=/bin/true\n").unwrap();
     let path = fake_systemctl_path(
         &fixture,
         &format!(
-            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{unit_path_token}/systemd/user.control {unit_path_token}/systemd/user {}\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claudemdeez-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nexit 0\n",
+            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{unit_path_token}/systemd/user.control {unit_path_token}/systemd/user {}\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claude-md-symlinker-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nexit 0\n",
             existing_unit.parent().unwrap().display(),
             existing_unit.display()
         ),
     );
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3338,7 +3338,7 @@ fn service_install_dry_run_refuses_unit_lookup_conflict() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service install dry-run runs");
@@ -3364,7 +3364,7 @@ fn service_install_rejects_disabled_watch_config() {
         ),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .args([
@@ -3374,7 +3374,7 @@ fn service_install_rejects_disabled_watch_config() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service install runs");
@@ -3398,7 +3398,7 @@ fn service_install_dry_run_validates_git_exclude_mode() {
         ),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .args([
@@ -3408,7 +3408,7 @@ fn service_install_dry_run_validates_git_exclude_mode() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service install dry-run runs");
@@ -3430,14 +3430,14 @@ fn service_install_dry_run_does_not_write_unit() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_path = xdg_config_home
         .join("systemd/user")
-        .join("claudemdeez-test.service");
-    let bin_path = fixture.root.path().join("bin/claudemdeez");
+        .join("claude-md-symlinker-test.service");
+    let bin_path = fixture.root.path().join("bin/claude-md-symlinker");
     let data_dir = fixture.root.path().join("data");
     fs::create_dir_all(bin_path.parent().unwrap()).unwrap();
     fs::write(&bin_path, "#!/bin/sh\n").unwrap();
     make_executable(&bin_path);
     let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3449,7 +3449,7 @@ fn service_install_dry_run_does_not_write_unit() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
             "--bin",
             bin_path.to_str().unwrap(),
             "--data-dir",
@@ -3461,7 +3461,7 @@ fn service_install_dry_run_does_not_write_unit() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("would write systemd user unit"));
-    assert!(stdout.contains("claudemdeez-test.service"));
+    assert!(stdout.contains("claude-md-symlinker-test.service"));
     assert!(!unit_path.exists());
     assert!(!data_dir.exists());
 }
@@ -3479,14 +3479,14 @@ fn service_install_dry_run_rejects_unwritable_data_dir_parent() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_path = xdg_config_home
         .join("systemd/user")
-        .join("claudemdeez-test.service");
+        .join("claude-md-symlinker-test.service");
     let data_parent = fixture.root.path().join("readonly-data-parent");
     let data_dir = data_parent.join("data");
     fs::create_dir_all(&data_parent).unwrap();
     let original_permissions = fs::metadata(&data_parent).unwrap().permissions();
     fs::set_permissions(&data_parent, fs::Permissions::from_mode(0o555)).unwrap();
     let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3498,7 +3498,7 @@ fn service_install_dry_run_rejects_unwritable_data_dir_parent() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
             "--data-dir",
             data_dir.to_str().unwrap(),
         ])
@@ -3526,10 +3526,10 @@ fn service_install_creates_service_data_dir_before_writing_unit() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_path = xdg_config_home
         .join("systemd/user")
-        .join("claudemdeez-test.service");
-    let data_dir = fixture.root.path().join("missing-data/claudemdeez");
+        .join("claude-md-symlinker-test.service");
+    let data_dir = fixture.root.path().join("missing-data/claude-md-symlinker");
     let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3540,7 +3540,7 @@ fn service_install_creates_service_data_dir_before_writing_unit() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
             "--data-dir",
             data_dir.to_str().unwrap(),
             "--no-enable",
@@ -3564,10 +3564,10 @@ fn service_install_now_restarts_existing_unit() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_dir = xdg_config_home.join("systemd/user");
     fs::create_dir_all(&unit_dir).unwrap();
-    let unit_path = unit_dir.join("claudemdeez-test.service");
+    let unit_path = unit_dir.join("claude-md-symlinker-test.service");
     fs::write(
         &unit_path,
-        "# claudemdeez managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
+        "# claude-md-symlinker managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
     )
     .unwrap();
     let log_path = fixture.root.path().join("systemctl.log");
@@ -3579,7 +3579,7 @@ fn service_install_now_restarts_existing_unit() {
             xdg_config_home.display()
         ),
     );
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3590,7 +3590,7 @@ fn service_install_now_restarts_existing_unit() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
             "--now",
         ])
         .output()
@@ -3598,8 +3598,8 @@ fn service_install_now_restarts_existing_unit() {
 
     assert_eq!(output.status.code(), Some(0));
     let log = fs::read_to_string(log_path).unwrap();
-    assert!(log.contains("--user restart claudemdeez-test.service"));
-    assert!(!log.contains("--user start claudemdeez-test.service"));
+    assert!(log.contains("--user restart claude-md-symlinker-test.service"));
+    assert!(!log.contains("--user start claude-md-symlinker-test.service"));
 }
 
 #[cfg(target_os = "linux")]
@@ -3618,7 +3618,7 @@ fn service_install_dry_run_rejects_unwritable_unit_dir() {
     let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
     let original_permissions = fs::metadata(&unit_dir).unwrap().permissions();
     fs::set_permissions(&unit_dir, fs::Permissions::from_mode(0o555)).unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3630,7 +3630,7 @@ fn service_install_dry_run_rejects_unwritable_unit_dir() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service install dry-run runs");
@@ -3641,7 +3641,7 @@ fn service_install_dry_run_rejects_unwritable_unit_dir() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("systemd user unit parent"));
     assert!(stderr.contains("is not writable"));
-    assert!(!unit_dir.join("claudemdeez-test.service").exists());
+    assert!(!unit_dir.join("claude-md-symlinker-test.service").exists());
 }
 
 #[cfg(target_os = "linux")]
@@ -3657,16 +3657,16 @@ fn service_install_dry_run_rejects_readonly_managed_unit() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_dir = xdg_config_home.join("systemd/user");
     fs::create_dir_all(&unit_dir).unwrap();
-    let unit_path = unit_dir.join("claudemdeez-test.service");
+    let unit_path = unit_dir.join("claude-md-symlinker-test.service");
     let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
     fs::write(
         &unit_path,
-        "# claudemdeez managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
+        "# claude-md-symlinker managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
     )
     .unwrap();
     let original_permissions = fs::metadata(&unit_path).unwrap().permissions();
     fs::set_permissions(&unit_path, fs::Permissions::from_mode(0o444)).unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3678,7 +3678,7 @@ fn service_install_dry_run_rejects_readonly_managed_unit() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service install dry-run runs");
@@ -3702,10 +3702,10 @@ fn service_install_dry_run_refuses_unmanaged_unit_conflict() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_dir = xdg_config_home.join("systemd/user");
     fs::create_dir_all(&unit_dir).unwrap();
-    let unit_path = unit_dir.join("claudemdeez-test.service");
+    let unit_path = unit_dir.join("claude-md-symlinker-test.service");
     fs::write(&unit_path, "[Service]\nExecStart=/bin/true\n").unwrap();
     let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3717,7 +3717,7 @@ fn service_install_dry_run_refuses_unmanaged_unit_conflict() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service install dry-run runs");
@@ -3737,7 +3737,7 @@ fn service_start_dry_run_requires_managed_unit() {
     let fixture = Fixture::new();
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3747,7 +3747,7 @@ fn service_start_dry_run_requires_managed_unit() {
             "service",
             "start",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service start dry-run runs");
@@ -3764,10 +3764,10 @@ fn service_start_dry_run_refuses_unmanaged_unit_conflict() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_dir = xdg_config_home.join("systemd/user");
     fs::create_dir_all(&unit_dir).unwrap();
-    let unit_path = unit_dir.join("claudemdeez-test.service");
+    let unit_path = unit_dir.join("claude-md-symlinker-test.service");
     fs::write(&unit_path, "[Service]\nExecStart=/bin/true\n").unwrap();
     let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3777,7 +3777,7 @@ fn service_start_dry_run_refuses_unmanaged_unit_conflict() {
             "service",
             "start",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service start dry-run runs");
@@ -3798,26 +3798,26 @@ fn service_start_dry_run_refuses_unit_lookup_conflict() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_dir = xdg_config_home.join("systemd/user");
     fs::create_dir_all(&unit_dir).unwrap();
-    let unit_path = unit_dir.join("claudemdeez-test.service");
+    let unit_path = unit_dir.join("claude-md-symlinker-test.service");
     fs::write(
         &unit_path,
-        "# claudemdeez managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
+        "# claude-md-symlinker managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
     )
     .unwrap();
     let unit_path_token = systemd_show_path_token(&xdg_config_home);
     let transient_unit = fixture
         .root
         .path()
-        .join("run/user/1000/systemd/transient/claudemdeez-test.service");
+        .join("run/user/1000/systemd/transient/claude-md-symlinker-test.service");
     let path = fake_systemctl_path(
         &fixture,
         &format!(
-            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{unit_path_token}/systemd/user.control {unit_path_token}/systemd/user {}\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claudemdeez-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nexit 0\n",
+            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{unit_path_token}/systemd/user.control {unit_path_token}/systemd/user {}\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claude-md-symlinker-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nexit 0\n",
             transient_unit.parent().unwrap().display(),
             transient_unit.display()
         ),
     );
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3827,7 +3827,7 @@ fn service_start_dry_run_refuses_unit_lookup_conflict() {
             "service",
             "start",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service start dry-run runs");
@@ -3845,10 +3845,10 @@ fn service_uninstall_dry_run_refuses_unmanaged_unit_conflict() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_dir = xdg_config_home.join("systemd/user");
     fs::create_dir_all(&unit_dir).unwrap();
-    let unit_path = unit_dir.join("claudemdeez-test.service");
+    let unit_path = unit_dir.join("claude-md-symlinker-test.service");
     fs::write(&unit_path, "[Service]\nExecStart=/bin/true\n").unwrap();
     let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3858,7 +3858,7 @@ fn service_uninstall_dry_run_refuses_unmanaged_unit_conflict() {
             "service",
             "uninstall",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service uninstall dry-run runs");
@@ -3879,26 +3879,26 @@ fn service_uninstall_dry_run_refuses_unit_lookup_conflict() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_dir = xdg_config_home.join("systemd/user");
     fs::create_dir_all(&unit_dir).unwrap();
-    let unit_path = unit_dir.join("claudemdeez-test.service");
+    let unit_path = unit_dir.join("claude-md-symlinker-test.service");
     fs::write(
         &unit_path,
-        "# claudemdeez managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
+        "# claude-md-symlinker managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
     )
     .unwrap();
     let unit_path_token = systemd_show_path_token(&xdg_config_home);
     let transient_unit = fixture
         .root
         .path()
-        .join("run/user/1000/systemd/transient/claudemdeez-test.service");
+        .join("run/user/1000/systemd/transient/claude-md-symlinker-test.service");
     let path = fake_systemctl_path(
         &fixture,
         &format!(
-            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{unit_path_token}/systemd/user.control {unit_path_token}/systemd/user {}\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claudemdeez-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nexit 0\n",
+            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{unit_path_token}/systemd/user.control {unit_path_token}/systemd/user {}\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claude-md-symlinker-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nexit 0\n",
             transient_unit.parent().unwrap().display(),
             transient_unit.display()
         ),
     );
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -3908,7 +3908,7 @@ fn service_uninstall_dry_run_refuses_unit_lookup_conflict() {
             "service",
             "uninstall",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service uninstall dry-run runs");
@@ -3926,10 +3926,10 @@ fn service_uninstall_surfaces_disable_failure() {
     let xdg_config_home = fixture.root.path().join("xdg-config");
     let unit_dir = xdg_config_home.join("systemd/user");
     fs::create_dir_all(&unit_dir).unwrap();
-    let unit_path = unit_dir.join("claudemdeez-test.service");
+    let unit_path = unit_dir.join("claude-md-symlinker-test.service");
     fs::write(
         &unit_path,
-        "# claudemdeez managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
+        "# claude-md-symlinker managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
     )
     .unwrap();
     let fake_bin_dir = fixture.root.path().join("bin");
@@ -3938,7 +3938,7 @@ fn service_uninstall_surfaces_disable_failure() {
     fs::write(
         &fake_systemctl,
         format!(
-            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{}/systemd/user.control {}/systemd/user\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claudemdeez-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nif [ \"$2\" = \"show-environment\" ]; then echo XDG_CONFIG_HOME={}; exit 0; fi\nif [ \"$2\" = \"disable\" ]; then echo disable failed >&2; exit 42; fi\nexit 0\n",
+            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{}/systemd/user.control {}/systemd/user\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claude-md-symlinker-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nif [ \"$2\" = \"show-environment\" ]; then echo XDG_CONFIG_HOME={}; exit 0; fi\nif [ \"$2\" = \"disable\" ]; then echo disable failed >&2; exit 42; fi\nexit 0\n",
             xdg_config_home.display(),
             xdg_config_home.display(),
             unit_path.display(),
@@ -3952,18 +3952,25 @@ fn service_uninstall_surfaces_disable_failure() {
         fake_bin_dir.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
         .env("PATH", path)
-        .args(["service", "uninstall", "--unit-name", "claudemdeez-test"])
+        .args([
+            "service",
+            "uninstall",
+            "--unit-name",
+            "claude-md-symlinker-test",
+        ])
         .output()
         .expect("service uninstall runs");
 
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("systemctl --user disable --now claudemdeez-test.service failed"));
+    assert!(
+        stderr.contains("systemctl --user disable --now claude-md-symlinker-test.service failed")
+    );
     assert!(stderr.contains("disable failed"));
     assert!(unit_path.exists());
 }
@@ -3983,7 +3990,7 @@ fn service_install_dry_run_validates_adapter_config() {
         ),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let output = Command::new(bin)
         .args([
@@ -3993,7 +4000,7 @@ fn service_install_dry_run_validates_adapter_config() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service install dry-run runs");
@@ -4010,7 +4017,7 @@ fn service_control_commands_do_not_require_valid_config() {
     let fixture = Fixture::new();
     let config_path = fixture.root.path().join("bad-service-config.toml");
     fs::write(&config_path, "not valid toml =").unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
 
     let uninstall = Command::new(bin)
         .args([
@@ -4020,7 +4027,7 @@ fn service_control_commands_do_not_require_valid_config() {
             "service",
             "uninstall",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service uninstall dry-run runs");
@@ -4037,7 +4044,7 @@ fn service_control_commands_do_not_require_valid_config() {
             "service",
             "install",
             "--unit-name",
-            "claudemdeez-test",
+            "claude-md-symlinker-test",
         ])
         .output()
         .expect("service install dry-run runs");
@@ -4066,7 +4073,8 @@ fn clean_invalid_exclude_leaves_managed_target_in_place() {
     fs::remove_file(repo.join("AGENTS.md")).unwrap();
     let exclude_path = git_exclude_path(&repo);
     let invalid_exclude =
-        b"# claudemdeez managed begin\n/CLAUDE.md\n# claudemdeez managed end\n\xff".to_vec();
+        b"# claude-md-symlinker managed begin\n/CLAUDE.md\n# claude-md-symlinker managed end\n\xff"
+            .to_vec();
     fs::write(&exclude_path, &invalid_exclude).unwrap();
 
     let report = cleaner::clean(
@@ -4135,7 +4143,8 @@ fn symlinked_git_exclude_file_is_rejected_before_removing() {
     let exclude_path = git_exclude_path(&repo);
     fs::remove_file(&exclude_path).unwrap();
     let victim = fixture.root.path().join("victim-exclude");
-    let victim_text = "# claudemdeez managed begin\n/CLAUDE.md\n# claudemdeez managed end\n";
+    let victim_text =
+        "# claude-md-symlinker managed begin\n/CLAUDE.md\n# claude-md-symlinker managed end\n";
     fs::write(&victim, victim_text).unwrap();
     std::os::unix::fs::symlink(&victim, &exclude_path).unwrap();
 
@@ -4208,7 +4217,8 @@ fn remove_if_managed_invalid_exclude_leaves_managed_target_in_place() {
     fs::remove_file(repo.join("AGENTS.md")).unwrap();
     let exclude_path = git_exclude_path(&repo);
     let invalid_exclude =
-        b"# claudemdeez managed begin\n/CLAUDE.md\n# claudemdeez managed end\n\xff".to_vec();
+        b"# claude-md-symlinker managed begin\n/CLAUDE.md\n# claude-md-symlinker managed end\n\xff"
+            .to_vec();
     fs::write(&exclude_path, &invalid_exclude).unwrap();
 
     let report = reconciler::apply(

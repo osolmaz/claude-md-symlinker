@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::Parser;
-use claudemdeez::{
+use claude_md_symlinker::{
     cleaner, cli, config,
     doctor::DoctorReport,
     reconciler::{self, ReconcileOptions},
@@ -148,7 +148,7 @@ fn command_state(dry_run: bool) -> Result<State> {
     }
 }
 
-fn output_report(json: bool, dry_run: bool, report: &claudemdeez::reporting::Report) {
+fn output_report(json: bool, dry_run: bool, report: &claude_md_symlinker::reporting::Report) {
     if json {
         print_json(report);
     } else {

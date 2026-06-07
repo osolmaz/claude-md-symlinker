@@ -1,11 +1,11 @@
-# CLAUDE.mdeez
+# claude-md-symlinker
 
-CLAUDE.mdeez keeps `AGENTS.md` as the canonical agent-instructions file and
+claude-md-symlinker keeps `AGENTS.md` as the canonical agent-instructions file and
 creates local compatibility files for tools that still expect their own
 instruction filename.
 
-The name is styled `CLAUDE.mdeez`: the `mdeez` part stands for "extra ez",
-meaning extra easy.
+The name is literal: it keeps Claude-compatible Markdown shims linked to the
+canonical `AGENTS.md` file.
 
 The built-in adapter is:
 
@@ -14,8 +14,8 @@ AGENTS.md -> CLAUDE.md
 ```
 
 In repositories you opt into, `CLAUDE.md` is generated locally and ignored by
-Git only when CLAUDE.mdeez created or already owns it. If a repository already
-has a user-owned `CLAUDE.md`, CLAUDE.mdeez leaves it untouched and keeps it
+Git only when claude-md-symlinker created or already owns it. If a repository already
+has a user-owned `CLAUDE.md`, claude-md-symlinker leaves it untouched and keeps it
 visible to Git.
 
 ## Install
@@ -28,14 +28,14 @@ Requirements:
 Install from GitHub:
 
 ```sh
-cargo install --git https://github.com/dutifuldev/claudemdeez
+cargo install --git https://github.com/dutifuldev/claude-md-symlinker
 ```
 
 Or install from a local checkout:
 
 ```sh
-git clone https://github.com/dutifuldev/claudemdeez
-cd claudemdeez
+git clone https://github.com/dutifuldev/claude-md-symlinker
+cd claude-md-symlinker
 cargo install --path .
 ```
 
@@ -47,22 +47,22 @@ cargo run -- apply ~/repos --dry-run
 
 ## Quick Start
 
-Choose the directories CLAUDE.mdeez is allowed to scan:
+Choose the directories claude-md-symlinker is allowed to scan:
 
 ```sh
-claudemdeez init ~/repos ~/work
+claude-md-symlinker init ~/repos ~/work
 ```
 
 Preview what would happen:
 
 ```sh
-claudemdeez apply --dry-run
+claude-md-symlinker apply --dry-run
 ```
 
 Apply the changes:
 
 ```sh
-claudemdeez apply
+claude-md-symlinker apply
 ```
 
 For each managed repository with `AGENTS.md`, the result is:
@@ -94,46 +94,46 @@ existing user file, it remains visible, usually as:
 ## Commands
 
 ```sh
-claudemdeez init <roots...>
+claude-md-symlinker init <roots...>
 ```
 
 Creates or updates the configured scan roots. Roots must already exist.
 
 ```sh
-claudemdeez apply [roots...]
+claude-md-symlinker apply [roots...]
 ```
 
 Runs reconciliation. If roots are supplied after config exists, they must stay
 inside the configured scan roots.
 
 ```sh
-claudemdeez watch [roots...]
+claude-md-symlinker watch [roots...]
 ```
 
 Runs the same reconciliation on startup, on relevant file events, and
 periodically. Watching is only a trigger; `apply` is the source of truth.
 
 ```sh
-claudemdeez service install
-claudemdeez service start
-claudemdeez service status
-claudemdeez service stop
-claudemdeez service uninstall
+claude-md-symlinker service install
+claude-md-symlinker service start
+claude-md-symlinker service status
+claude-md-symlinker service stop
+claude-md-symlinker service uninstall
 ```
 
 Installs and manages a Linux `systemd --user` service that runs
-`claudemdeez watch`. Service installation never uses root and never broadens
+`claude-md-symlinker watch`. Service installation never uses root and never broadens
 your configured scan roots.
 
 ```sh
-claudemdeez doctor
+claude-md-symlinker doctor
 ```
 
 Checks local setup, including Git availability, config, state storage, enabled
 adapters, and symlink support.
 
 ```sh
-claudemdeez clean [roots...] --remove-if-source-missing
+claude-md-symlinker clean [roots...] --remove-if-source-missing
 ```
 
 Removes stale managed shims after the source file is gone. Unknown files are
@@ -149,10 +149,10 @@ Global options:
 
 ## Configuration
 
-CLAUDE.mdeez uses the platform config directory by default. You can override the
-config path with `--config <path>` or `CLAUDEMDEEZ_CONFIG`.
+claude-md-symlinker uses the platform config directory by default. You can override the
+config path with `--config <path>` or `CLAUDE_MD_SYMLINKER_CONFIG`.
 
-The local SQLite state directory can be overridden with `CLAUDEMDEEZ_DATA_DIR`.
+The local SQLite state directory can be overridden with `CLAUDE_MD_SYMLINKER_DATA_DIR`.
 
 Example config:
 
@@ -197,7 +197,7 @@ Important fields:
 
 ## Safety Model
 
-CLAUDE.mdeez is intentionally conservative:
+claude-md-symlinker is intentionally conservative:
 
 - It only scans directories you opt into.
 - It never scans the whole machine by default.
@@ -218,33 +218,33 @@ Managed shims are excluded with the repository-local Git exclude file:
 .git/info/exclude
 ```
 
-CLAUDE.mdeez writes a managed block like this:
+claude-md-symlinker writes a managed block like this:
 
 ```text
-# claudemdeez managed begin
+# claude-md-symlinker managed begin
 /CLAUDE.md
-# claudemdeez managed end
+# claude-md-symlinker managed end
 ```
 
 This file is private to your checkout and is not committed.
 
-If `CLAUDE.md` already exists and is not managed by CLAUDE.mdeez:
+If `CLAUDE.md` already exists and is not managed by claude-md-symlinker:
 
 - the file is left untouched
 - no ignore entry is added for it
 - Git continues to report it as untracked or tracked normally
 - `apply` reports a conflict and exits with code `2`
 
-To let CLAUDE.mdeez manage that repository, move the useful content into
+To let claude-md-symlinker manage that repository, move the useful content into
 `AGENTS.md`, then remove or rename the old `CLAUDE.md` and run:
 
 ```sh
-claudemdeez apply
+claude-md-symlinker apply
 ```
 
 ## Materialization
 
-In `auto` mode, CLAUDE.mdeez tries:
+In `auto` mode, claude-md-symlinker tries:
 
 1. Relative symlink
 2. Hardlink, only when `allow_hardlink = true`
@@ -253,56 +253,56 @@ In `auto` mode, CLAUDE.mdeez tries:
 Managed copies start with:
 
 ```html
-<!-- claudemdeez managed: source=AGENTS.md; adapter=claude; do not edit this file directly. -->
+<!-- claude-md-symlinker managed: source=AGENTS.md; adapter=claude; do not edit this file directly. -->
 ```
 
 Edit `AGENTS.md`, not generated shims.
 
 ## Linux User Service
 
-On Linux, CLAUDE.mdeez can install a user-scoped systemd service for automatic
+On Linux, claude-md-symlinker can install a user-scoped systemd service for automatic
 repair. Install the binary first, initialize your scan roots, then install and
 start the service:
 
 ```sh
-cargo install --git https://github.com/dutifuldev/claudemdeez
-claudemdeez init ~/repos ~/work
-claudemdeez service install
-claudemdeez service start
+cargo install --git https://github.com/dutifuldev/claude-md-symlinker
+claude-md-symlinker init ~/repos ~/work
+claude-md-symlinker service install
+claude-md-symlinker service start
 ```
 
 The installer writes:
 
 ```text
-~/.config/systemd/user/claudemdeez.service
+~/.config/systemd/user/claude-md-symlinker.service
 ```
 
 The unit runs:
 
 ```sh
-claudemdeez --config <your-config> watch
+claude-md-symlinker --config <your-config> watch
 ```
 
 Service install requires absolute scan paths, including paths written with
-`~`. Running `claudemdeez init` stores canonical absolute roots.
+`~`. Running `claude-md-symlinker init` stores canonical absolute roots.
 
 Useful service commands:
 
 ```sh
-claudemdeez service status
-claudemdeez service restart
-claudemdeez service stop
-claudemdeez service uninstall
+claude-md-symlinker service status
+claude-md-symlinker service restart
+claude-md-symlinker service stop
+claude-md-symlinker service uninstall
 ```
 
 `service install` refuses to run when no scan roots are configured. If you use
 an explicit config path, pass it during installation:
 
 ```sh
-claudemdeez --config ~/.config/claudemdeez/work.toml service install
+claude-md-symlinker --config ~/.config/claude-md-symlinker/work.toml service install
 ```
 
-The generated unit includes a CLAUDE.mdeez marker. `service uninstall` removes
+The generated unit includes a claude-md-symlinker marker. `service uninstall` removes
 only managed units and refuses to remove unknown user unit files.
 
 ## Exit Codes

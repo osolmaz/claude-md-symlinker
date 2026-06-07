@@ -123,7 +123,7 @@ impl AppConfig {
             if config_existed {
                 if configured_roots.is_empty() {
                     bail!(
-                        "requested roots cannot be used because no scan roots are configured; run `claudemdeez init <root...>` first"
+                        "requested roots cannot be used because no scan roots are configured; run `claude-md-symlinker init <root...>` first"
                     );
                 }
                 for root in &requested_roots {
@@ -142,7 +142,9 @@ impl AppConfig {
         };
 
         if roots.is_empty() {
-            bail!("no scan roots configured; run `claudemdeez init <root...>` or pass roots");
+            bail!(
+                "no scan roots configured; run `claude-md-symlinker init <root...>` or pass roots"
+            );
         }
 
         let include_paths = canonicalize_existing_paths(&self.scan.include_paths)?;
@@ -286,13 +288,13 @@ pub fn config_path(path_override: Option<&Path>) -> Result<PathBuf> {
         return absolute_expanded_path(path);
     }
 
-    if let Ok(path) = env::var("CLAUDEMDEEZ_CONFIG") {
+    if let Ok(path) = env::var("CLAUDE_MD_SYMLINKER_CONFIG") {
         return absolute_expanded_path(Path::new(&path));
     }
 
-    let dirs = ProjectDirs::from("dev", "dutiful", "claudemdeez")
+    let dirs = ProjectDirs::from("dev", "dutiful", "claude-md-symlinker")
         .context("could not determine platform config directory")?;
-    Ok(dirs.config_dir().join("claudemdeez.toml"))
+    Ok(dirs.config_dir().join("claude-md-symlinker.toml"))
 }
 
 fn absolute_expanded_path(path: &Path) -> Result<PathBuf> {
@@ -305,11 +307,11 @@ fn absolute_expanded_path(path: &Path) -> Result<PathBuf> {
 }
 
 pub fn data_dir() -> Result<PathBuf> {
-    if let Ok(path) = env::var("CLAUDEMDEEZ_DATA_DIR") {
+    if let Ok(path) = env::var("CLAUDE_MD_SYMLINKER_DATA_DIR") {
         return Ok(expand_tilde(Path::new(&path)));
     }
 
-    let dirs = ProjectDirs::from("dev", "dutiful", "claudemdeez")
+    let dirs = ProjectDirs::from("dev", "dutiful", "claude-md-symlinker")
         .context("could not determine platform data directory")?;
     Ok(dirs.data_dir().to_path_buf())
 }

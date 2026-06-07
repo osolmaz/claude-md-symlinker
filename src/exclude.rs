@@ -11,8 +11,8 @@ use crate::{
     git::{self, GitRepo},
 };
 
-const BEGIN: &str = "# claudemdeez managed begin";
-const END: &str = "# claudemdeez managed end";
+const BEGIN: &str = "# claude-md-symlinker managed begin";
+const END: &str = "# claude-md-symlinker managed end";
 
 pub fn ensure(repo: &GitRepo, target_rel: &Path, mode: ExcludeMode, dry_run: bool) -> Result<bool> {
     match mode {
@@ -25,7 +25,7 @@ pub fn remove(repo: &GitRepo, target_rel: &Path, mode: ExcludeMode, dry_run: boo
     match mode {
         ExcludeMode::PerRepo => {
             let removed_ignore = remove_from_file(repo, target_rel, dry_run)?;
-            let ensured_unignore = if claudemdeez_global_ignore_is_active(target_rel)? {
+            let ensured_unignore = if claude_md_symlinker_global_ignore_is_active(target_rel)? {
                 ensure_entry_file(repo, &unignore_entry(target_rel), dry_run)?
             } else {
                 false
@@ -49,23 +49,23 @@ fn reject_global_mode<T>() -> Result<T> {
     )
 }
 
-fn claudemdeez_global_ignore_is_active(target_rel: &Path) -> Result<bool> {
-    let claudemdeez_global_path = data_dir()?.join("git-excludes");
+fn claude_md_symlinker_global_ignore_is_active(target_rel: &Path) -> Result<bool> {
+    let claude_md_symlinker_global_path = data_dir()?.join("git-excludes");
     let Some(configured_path) = git::configured_global_excludes_file()? else {
         return Ok(false);
     };
-    if normalized_path(&configured_path)? != normalized_path(&claudemdeez_global_path)? {
+    if normalized_path(&configured_path)? != normalized_path(&claude_md_symlinker_global_path)? {
         return Ok(false);
     }
 
-    let current = match fs::read_to_string(&claudemdeez_global_path) {
+    let current = match fs::read_to_string(&claude_md_symlinker_global_path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => {
             return Err(error).with_context(|| {
                 format!(
                     "failed to read global exclude file {}",
-                    claudemdeez_global_path.display()
+                    claude_md_symlinker_global_path.display()
                 )
             });
         }
@@ -366,7 +366,7 @@ mod tests {
     fn remove_deletes_empty_managed_block() {
         let current = upsert_managed_entry("existing\n", "/CLAUDE.md");
         let next = remove_managed_entry(&current, "/CLAUDE.md");
-        assert!(!next.contains("claudemdeez managed"));
+        assert!(!next.contains("claude-md-symlinker managed"));
         assert!(!next.contains("/CLAUDE.md"));
         assert!(next.contains("existing"));
     }
@@ -385,7 +385,7 @@ mod tests {
         let current = upsert_managed_entry("existing\n", &entry);
         assert!(current.contains("/CLAUDE.md\\ \n"));
         let next = remove_managed_entry(&current, &entry);
-        assert!(!next.contains("claudemdeez managed"));
+        assert!(!next.contains("claude-md-symlinker managed"));
         assert!(!next.contains("/CLAUDE.md\\ "));
     }
 }

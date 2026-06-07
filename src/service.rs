@@ -17,7 +17,7 @@ use crate::{
     exclude,
 };
 
-const MANAGED_MARKER: &str = "# claudemdeez managed systemd user unit";
+const MANAGED_MARKER: &str = "# claude-md-symlinker managed systemd user unit";
 
 #[derive(Debug, Serialize)]
 struct ServiceReport {
@@ -316,13 +316,13 @@ fn build_unit(spec: &UnitSpec) -> String {
     .map(String::as_str)
     .collect::<Vec<_>>()
     .join(" ");
-    let data_env = format!("CLAUDEMDEEZ_DATA_DIR={}", spec.data_dir.display());
+    let data_env = format!("CLAUDE_MD_SYMLINKER_DATA_DIR={}", spec.data_dir.display());
 
     format!(
         r#"{MANAGED_MARKER}
 [Unit]
-Description=CLAUDE.mdeez AGENTS.md compatibility watcher
-Documentation=https://github.com/dutifuldev/claudemdeez
+Description=claude-md-symlinker AGENTS.md compatibility watcher
+Documentation=https://github.com/dutifuldev/claude-md-symlinker
 
 [Service]
 Type=exec
@@ -357,7 +357,7 @@ fn ensure_service_scan_paths_are_absolute(config: &config::AppConfig) -> Result<
     {
         if !config::expand_tilde(path).is_absolute() {
             bail!(
-                "service install requires absolute scan paths; run `claudemdeez init <root...>` to store canonical roots"
+                "service install requires absolute scan paths; run `claude-md-symlinker init <root...>` to store canonical roots"
             );
         }
     }
@@ -611,7 +611,9 @@ fn ensure_managed_unit_installed(unit_path: &Path) -> Result<()> {
     if existing_managed_unit(unit_path)?.is_some() {
         return Ok(());
     }
-    bail!("managed systemd user unit is not installed; run `claudemdeez service install` first");
+    bail!(
+        "managed systemd user unit is not installed; run `claude-md-symlinker service install` first"
+    );
 }
 
 fn ensure_unit_name_is_available(spec: &UnitSpec, require_systemd: bool) -> Result<()> {
@@ -1028,12 +1030,12 @@ mod tests {
     #[test]
     fn unit_name_is_normalized_and_validated() {
         assert_eq!(
-            normalize_unit_name("claudemdeez").unwrap(),
-            "claudemdeez.service"
+            normalize_unit_name("claude-md-symlinker").unwrap(),
+            "claude-md-symlinker.service"
         );
         assert_eq!(
-            normalize_unit_name("claudemdeez-smoke.service").unwrap(),
-            "claudemdeez-smoke.service"
+            normalize_unit_name("claude-md-symlinker-smoke.service").unwrap(),
+            "claude-md-symlinker-smoke.service"
         );
         assert!(normalize_unit_name("-bad").is_err());
         assert!(normalize_unit_name("../bad").is_err());
@@ -1044,28 +1046,30 @@ mod tests {
         assert!(normalize_unit_name("bad@").is_err());
         assert!(normalize_unit_name("bad@@name").is_err());
         assert_eq!(
-            normalize_unit_name("claudemdeez@work").unwrap(),
-            "claudemdeez@work.service"
+            normalize_unit_name("claude-md-symlinker@work").unwrap(),
+            "claude-md-symlinker@work.service"
         );
     }
 
     #[test]
     fn generated_unit_runs_watch_with_explicit_config_and_data_dir() {
         let spec = UnitSpec {
-            unit_name: "claudemdeez.service".to_string(),
-            unit_path: PathBuf::from("/home/user/.config/systemd/user/claudemdeez.service"),
-            config_path: PathBuf::from("/home/user/.config/claudemdeez/claudemdeez.toml"),
-            bin_path: PathBuf::from("/home/user/.cargo/bin/claudemdeez"),
-            data_dir: PathBuf::from("/home/user/.local/share/claudemdeez"),
+            unit_name: "claude-md-symlinker.service".to_string(),
+            unit_path: PathBuf::from("/home/user/.config/systemd/user/claude-md-symlinker.service"),
+            config_path: PathBuf::from(
+                "/home/user/.config/claude-md-symlinker/claude-md-symlinker.toml",
+            ),
+            bin_path: PathBuf::from("/home/user/.cargo/bin/claude-md-symlinker"),
+            data_dir: PathBuf::from("/home/user/.local/share/claude-md-symlinker"),
         };
 
         let unit = build_unit(&spec);
 
         assert!(is_managed_unit(&unit));
-        assert!(unit.contains("ExecStart=\"/home/user/.cargo/bin/claudemdeez\" \"--config\" \"/home/user/.config/claudemdeez/claudemdeez.toml\" \"watch\""));
+        assert!(unit.contains("ExecStart=\"/home/user/.cargo/bin/claude-md-symlinker\" \"--config\" \"/home/user/.config/claude-md-symlinker/claude-md-symlinker.toml\" \"watch\""));
         assert!(
             unit.contains(
-                "Environment=\"CLAUDEMDEEZ_DATA_DIR=/home/user/.local/share/claudemdeez\""
+                "Environment=\"CLAUDE_MD_SYMLINKER_DATA_DIR=/home/user/.local/share/claude-md-symlinker\""
             )
         );
         assert!(unit.contains("Type=exec"));
@@ -1075,10 +1079,10 @@ mod tests {
     #[test]
     fn generated_unit_escapes_systemd_special_characters() {
         let spec = UnitSpec {
-            unit_name: "claudemdeez.service".to_string(),
-            unit_path: PathBuf::from("/home/user/.config/systemd/user/claudemdeez.service"),
-            config_path: PathBuf::from("/home/user/configs/claude\"mdeez$cfg.toml"),
-            bin_path: PathBuf::from("/home/user/bin/claude%mdeez$tool"),
+            unit_name: "claude-md-symlinker.service".to_string(),
+            unit_path: PathBuf::from("/home/user/.config/systemd/user/claude-md-symlinker.service"),
+            config_path: PathBuf::from("/home/user/configs/claude-md-symlinker\"cfg$cfg.toml"),
+            bin_path: PathBuf::from("/home/user/bin/claude-md-symlinker%tool$tool"),
             data_dir: PathBuf::from("/home/user/data%dir$extra"),
         };
 
@@ -1086,10 +1090,14 @@ mod tests {
 
         assert!(
             unit.contains(
-                "ExecStart=\"/home/user/bin/claude%%mdeez$tool\" \"--config\" \"/home/user/configs/claude\\\"mdeez$$cfg.toml\" \"watch\""
+                "ExecStart=\"/home/user/bin/claude-md-symlinker%%tool$tool\" \"--config\" \"/home/user/configs/claude-md-symlinker\\\"cfg$$cfg.toml\" \"watch\""
             )
         );
-        assert!(unit.contains("Environment=\"CLAUDEMDEEZ_DATA_DIR=/home/user/data%%dir$extra\""));
+        assert!(
+            unit.contains(
+                "Environment=\"CLAUDE_MD_SYMLINKER_DATA_DIR=/home/user/data%%dir$extra\""
+            )
+        );
     }
 
     #[test]

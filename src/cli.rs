@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "claudemdeez")]
+#[command(name = "claude-md-symlinker")]
 #[command(about = "Keep AGENTS.md canonical and generate local agent-tool shims")]
 #[command(version)]
 pub struct Cli {
@@ -82,14 +82,14 @@ pub enum ServiceCommand {
 #[derive(Debug, Args)]
 pub struct ServiceInstallArgs {
     /// Unit name to install. `.service` is added when omitted.
-    #[arg(long, default_value = "claudemdeez.service")]
+    #[arg(long, default_value = "claude-md-symlinker.service")]
     pub unit_name: String,
 
     /// Binary path to run from the service. Defaults to the current executable.
     #[arg(long)]
     pub bin: Option<PathBuf>,
 
-    /// Data directory to expose through CLAUDEMDEEZ_DATA_DIR.
+    /// Data directory to expose through CLAUDE_MD_SYMLINKER_DATA_DIR.
     #[arg(long)]
     pub data_dir: Option<PathBuf>,
 
@@ -105,6 +105,6 @@ pub struct ServiceInstallArgs {
 #[derive(Debug, Args)]
 pub struct ServiceUnitArgs {
     /// Unit name. `.service` is added when omitted.
-    #[arg(long, default_value = "claudemdeez.service")]
+    #[arg(long, default_value = "claude-md-symlinker.service")]
     pub unit_name: String,
 }
