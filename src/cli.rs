@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "claudectomy")]
+#[command(name = "claudemdeez")]
 #[command(about = "Keep AGENTS.md canonical and generate local agent-tool shims")]
 #[command(version)]
 pub struct Cli {

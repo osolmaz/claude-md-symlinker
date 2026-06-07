@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::Parser;
-use claudectomy::{
+use claudemdeez::{
     cleaner, cli, config,
     doctor::DoctorReport,
     reconciler::{self, ReconcileOptions},
@@ -134,7 +134,7 @@ fn command_state(dry_run: bool) -> Result<State> {
     }
 }
 
-fn output_report(json: bool, dry_run: bool, report: &claudectomy::reporting::Report) {
+fn output_report(json: bool, dry_run: bool, report: &claudemdeez::reporting::Report) {
     if json {
         print_json(report);
     } else {

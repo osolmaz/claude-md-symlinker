@@ -1,10 +1,10 @@
 [package]
-name = "claudectomy"
+name = "claudemdeez"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
 description = "Keep AGENTS.md canonical and generate local tool-specific agent instruction shims."
-repository = "https://github.com/dutifuldev/claudectomy"
+repository = "https://github.com/dutifuldev/claudemdeez"
 
 [dependencies]
 anyhow = "1.0"

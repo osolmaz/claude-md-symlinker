@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use claudectomy::{
+use claudemdeez::{
     cleaner::{self, CleanOptions},
     config::{AppConfig, MaterializationStrategy, SourceMissingBehavior},
     reconciler::{self, ReconcileOptions},
@@ -882,9 +882,9 @@ fn fifo_source_is_rejected_without_hanging() {
         format!("[scan]\nroots = [\"{}\"]\n", fixture.root.path().display()),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
     let child = Command::new(bin)
-        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
         .args(["--config", config_path.to_str().unwrap(), "apply"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1026,7 +1026,7 @@ fn copy_materialization_refreshes_managed_copy() {
 
     assert_eq!(report.summary.refreshed, 1);
     let text = fs::read_to_string(repo.join("CLAUDE.md")).unwrap();
-    assert!(text.contains("claudectomy managed"));
+    assert!(text.contains("claudemdeez managed"));
     assert!(text.ends_with("v2\n"));
 }
 
@@ -1264,7 +1264,7 @@ fn explicit_copy_strategy_replaces_existing_managed_symlink() {
             .is_symlink()
     );
     let text = fs::read_to_string(repo.join("CLAUDE.md")).unwrap();
-    assert!(text.contains("claudectomy managed"));
+    assert!(text.contains("claudemdeez managed"));
     assert!(text.ends_with("canonical instructions\n"));
 }
 
@@ -2343,10 +2343,10 @@ fn cli_dry_run_clean_does_not_remove_stale_hardlinks_by_state() {
         ),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
 
     let apply = Command::new(bin)
-        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
         .args(["--config", config_path.to_str().unwrap(), "apply"])
         .output()
         .expect("apply runs");
@@ -2358,7 +2358,7 @@ fn cli_dry_run_clean_does_not_remove_stale_hardlinks_by_state() {
     fs::remove_file(repo.join("AGENTS.md")).unwrap();
 
     let dry_run = Command::new(bin)
-        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
         .args([
             "--dry-run",
             "--json",
@@ -2380,7 +2380,7 @@ fn cli_dry_run_clean_does_not_remove_stale_hardlinks_by_state() {
     assert!(repo.join("CLAUDE.md").exists());
 
     let clean = Command::new(bin)
-        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
         .args([
             "--config",
             config_path.to_str().unwrap(),
@@ -2401,7 +2401,7 @@ fn cli_dry_run_clean_does_not_remove_stale_hardlinks_by_state() {
 fn cli_dry_run_init_does_not_write_config() {
     let fixture = Fixture::new();
     let config_path = fixture.root.path().join("dry-run-config.toml");
-    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
 
     let dry_run = Command::new(bin)
         .args([
@@ -2459,10 +2459,10 @@ fn global_mode_is_rejected_without_mutating_repo_or_global_config() {
     )
     .unwrap();
     let global_config = fixture.root.path().join("global-gitconfig");
-    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
 
     let apply = Command::new(bin)
-        .env("CLAUDECTOMY_DATA_DIR", data_dir)
+        .env("CLAUDEMDEEZ_DATA_DIR", data_dir)
         .env("GIT_CONFIG_GLOBAL", &global_config)
         .args(["--config", config_path.to_str().unwrap(), "apply"])
         .output()
@@ -2493,10 +2493,10 @@ fn global_mode_is_rejected_even_without_sources() {
         ),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
 
     let apply = Command::new(bin)
-        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
         .args(["--config", config_path.to_str().unwrap(), "apply"])
         .output()
         .expect("apply runs");
@@ -2519,10 +2519,10 @@ fn doctor_fails_when_global_mode_is_configured() {
         ),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
 
     let doctor = Command::new(bin)
-        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
         .args(["--config", config_path.to_str().unwrap(), "doctor"])
         .output()
         .expect("doctor runs");
@@ -2542,10 +2542,10 @@ fn doctor_dry_run_does_not_create_state() {
         format!("[scan]\nroots = [\"{}\"]\n", fixture.root.path().display()),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
 
     let doctor = Command::new(bin)
-        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
         .args([
             "--dry-run",
             "--config",
@@ -2571,12 +2571,12 @@ fn per_repo_mode_conflict_unignores_owned_global_exclude() {
     let config_path = fixture.root.path().join("config.toml");
     let data_dir = fixture.data.path();
     let global_config = fixture.root.path().join("global-gitconfig");
-    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
 
     fs::write(repo.join("CLAUDE.md"), "user-owned replacement\n").unwrap();
     fs::write(
         data_dir.join("git-excludes"),
-        "# claudectomy managed begin\n/CLAUDE.md\n# claudectomy managed end\n",
+        "# claudemdeez managed begin\n/CLAUDE.md\n# claudemdeez managed end\n",
     )
     .unwrap();
     let configured = Command::new("git")
@@ -2601,7 +2601,7 @@ fn per_repo_mode_conflict_unignores_owned_global_exclude() {
     )
     .unwrap();
     let conflict = Command::new(bin)
-        .env("CLAUDECTOMY_DATA_DIR", data_dir)
+        .env("CLAUDEMDEEZ_DATA_DIR", data_dir)
         .env("GIT_CONFIG_GLOBAL", &global_config)
         .args(["--config", config_path.to_str().unwrap(), "apply"])
         .output()
@@ -2632,13 +2632,13 @@ fn per_repo_mode_unignores_owned_global_exclude_configured_with_tilde() {
 
     let home = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"));
     let data_dir = tempfile::Builder::new()
-        .prefix(".claudectomy-global-")
+        .prefix(".claudemdeez-global-")
         .tempdir_in(&home)
         .expect("home temp data dir");
     let global_excludes = data_dir.path().join("git-excludes");
     fs::write(
         &global_excludes,
-        "# claudectomy managed begin\n/CLAUDE.md\n# claudectomy managed end\n",
+        "# claudemdeez managed begin\n/CLAUDE.md\n# claudemdeez managed end\n",
     )
     .unwrap();
     let tilde_excludes = format!(
@@ -2667,9 +2667,9 @@ fn per_repo_mode_unignores_owned_global_exclude_configured_with_tilde() {
         String::from_utf8_lossy(&configured.stderr)
     );
 
-    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
     let conflict = Command::new(bin)
-        .env("CLAUDECTOMY_DATA_DIR", data_dir.path())
+        .env("CLAUDEMDEEZ_DATA_DIR", data_dir.path())
         .env("GIT_CONFIG_GLOBAL", &global_config)
         .args(["--config", config_path.to_str().unwrap(), "apply"])
         .output()
@@ -2704,7 +2704,7 @@ fn per_repo_mode_unignores_owned_global_exclude_with_escaped_trailing_space() {
     let data_dir = fixture.data.path();
     fs::write(
         data_dir.join("git-excludes"),
-        "# claudectomy managed begin\n/CLAUDE.md\\ \n# claudectomy managed end\n",
+        "# claudemdeez managed begin\n/CLAUDE.md\\ \n# claudemdeez managed end\n",
     )
     .unwrap();
     let global_config = fixture.root.path().join("global-gitconfig");
@@ -2724,9 +2724,9 @@ fn per_repo_mode_unignores_owned_global_exclude_with_escaped_trailing_space() {
         String::from_utf8_lossy(&configured.stderr)
     );
 
-    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
     let conflict = Command::new(bin)
-        .env("CLAUDECTOMY_DATA_DIR", data_dir)
+        .env("CLAUDEMDEEZ_DATA_DIR", data_dir)
         .env("GIT_CONFIG_GLOBAL", &global_config)
         .args(["--config", config_path.to_str().unwrap(), "apply"])
         .output()
@@ -2843,10 +2843,10 @@ fn watch_disabled_exits_before_reconciling() {
         ),
     )
     .unwrap();
-    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
 
     let watch = Command::new(bin)
-        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
         .args(["--config", config_path.to_str().unwrap(), "watch"])
         .output()
         .expect("watch runs");
@@ -2866,10 +2866,10 @@ fn watch_reloads_config_and_updates_watched_roots() {
     fs::write(second_repo.join("AGENTS.md"), "second\n").unwrap();
     let config_path = fixture.root.path().join("watch-config.toml");
     write_config_roots(&config_path, &[&first_repo]);
-    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
 
     let mut child = Command::new(bin)
-        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
         .current_dir(fixture.root.path())
         .args(["--config", "watch-config.toml", "watch"])
         .stdout(Stdio::null())
@@ -2908,10 +2908,10 @@ fn watch_honors_json_output_flag() {
     fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
     let config_path = fixture.root.path().join("watch-json.toml");
     write_config_roots(&config_path, &[&repo]);
-    let bin = env!("CARGO_BIN_EXE_claudectomy");
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
 
     let mut child = Command::new(bin)
-        .env("CLAUDECTOMY_DATA_DIR", fixture.data.path())
+        .env("CLAUDEMDEEZ_DATA_DIR", fixture.data.path())
         .args([
             "--dry-run",
             "--json",
@@ -2977,7 +2977,7 @@ fn clean_invalid_exclude_leaves_managed_target_in_place() {
     fs::remove_file(repo.join("AGENTS.md")).unwrap();
     let exclude_path = git_exclude_path(&repo);
     let invalid_exclude =
-        b"# claudectomy managed begin\n/CLAUDE.md\n# claudectomy managed end\n\xff".to_vec();
+        b"# claudemdeez managed begin\n/CLAUDE.md\n# claudemdeez managed end\n\xff".to_vec();
     fs::write(&exclude_path, &invalid_exclude).unwrap();
 
     let report = cleaner::clean(
@@ -3046,7 +3046,7 @@ fn symlinked_git_exclude_file_is_rejected_before_removing() {
     let exclude_path = git_exclude_path(&repo);
     fs::remove_file(&exclude_path).unwrap();
     let victim = fixture.root.path().join("victim-exclude");
-    let victim_text = "# claudectomy managed begin\n/CLAUDE.md\n# claudectomy managed end\n";
+    let victim_text = "# claudemdeez managed begin\n/CLAUDE.md\n# claudemdeez managed end\n";
     fs::write(&victim, victim_text).unwrap();
     std::os::unix::fs::symlink(&victim, &exclude_path).unwrap();
 
@@ -3119,7 +3119,7 @@ fn remove_if_managed_invalid_exclude_leaves_managed_target_in_place() {
     fs::remove_file(repo.join("AGENTS.md")).unwrap();
     let exclude_path = git_exclude_path(&repo);
     let invalid_exclude =
-        b"# claudectomy managed begin\n/CLAUDE.md\n# claudectomy managed end\n\xff".to_vec();
+        b"# claudemdeez managed begin\n/CLAUDE.md\n# claudemdeez managed end\n\xff".to_vec();
     fs::write(&exclude_path, &invalid_exclude).unwrap();
 
     let report = reconciler::apply(
