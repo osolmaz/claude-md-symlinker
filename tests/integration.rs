@@ -3705,6 +3705,53 @@ fn service_start_dry_run_refuses_unmanaged_unit_conflict() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn service_start_dry_run_refuses_unit_lookup_conflict() {
+    let fixture = Fixture::new();
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_dir = xdg_config_home.join("systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let unit_path = unit_dir.join("claudemdeez-test.service");
+    fs::write(
+        &unit_path,
+        "# claudemdeez managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
+    )
+    .unwrap();
+    let unit_path_token = systemd_show_path_token(&xdg_config_home);
+    let transient_unit = fixture
+        .root
+        .path()
+        .join("run/user/1000/systemd/transient/claudemdeez-test.service");
+    let path = fake_systemctl_path(
+        &fixture,
+        &format!(
+            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{unit_path_token}/systemd/user.control {unit_path_token}/systemd/user {}\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claudemdeez-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nexit 0\n",
+            transient_unit.parent().unwrap().display(),
+            transient_unit.display()
+        ),
+    );
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--dry-run",
+            "service",
+            "start",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service start dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refusing to control systemd user unit"));
+    assert!(stderr.contains(transient_unit.to_str().unwrap()));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn service_uninstall_dry_run_refuses_unmanaged_unit_conflict() {
     let fixture = Fixture::new();
     let xdg_config_home = fixture.root.path().join("xdg-config");
@@ -3739,6 +3786,53 @@ fn service_uninstall_dry_run_refuses_unmanaged_unit_conflict() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn service_uninstall_dry_run_refuses_unit_lookup_conflict() {
+    let fixture = Fixture::new();
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_dir = xdg_config_home.join("systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let unit_path = unit_dir.join("claudemdeez-test.service");
+    fs::write(
+        &unit_path,
+        "# claudemdeez managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
+    )
+    .unwrap();
+    let unit_path_token = systemd_show_path_token(&xdg_config_home);
+    let transient_unit = fixture
+        .root
+        .path()
+        .join("run/user/1000/systemd/transient/claudemdeez-test.service");
+    let path = fake_systemctl_path(
+        &fixture,
+        &format!(
+            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{unit_path_token}/systemd/user.control {unit_path_token}/systemd/user {}\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claudemdeez-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nexit 0\n",
+            transient_unit.parent().unwrap().display(),
+            transient_unit.display()
+        ),
+    );
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--dry-run",
+            "service",
+            "uninstall",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service uninstall dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refusing to control systemd user unit"));
+    assert!(stderr.contains(transient_unit.to_str().unwrap()));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn service_uninstall_surfaces_disable_failure() {
     let fixture = Fixture::new();
     let xdg_config_home = fixture.root.path().join("xdg-config");
@@ -3756,7 +3850,10 @@ fn service_uninstall_surfaces_disable_failure() {
     fs::write(
         &fake_systemctl,
         format!(
-            "#!/bin/sh\nif [ \"$2\" = \"show-environment\" ]; then echo XDG_CONFIG_HOME={}; exit 0; fi\nif [ \"$2\" = \"disable\" ]; then echo disable failed >&2; exit 42; fi\nexit 0\n",
+            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{}/systemd/user.control {}/systemd/user\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claudemdeez-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nif [ \"$2\" = \"show-environment\" ]; then echo XDG_CONFIG_HOME={}; exit 0; fi\nif [ \"$2\" = \"disable\" ]; then echo disable failed >&2; exit 42; fi\nexit 0\n",
+            xdg_config_home.display(),
+            xdg_config_home.display(),
+            unit_path.display(),
             xdg_config_home.display()
         ),
     )

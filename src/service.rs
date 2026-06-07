@@ -142,6 +142,9 @@ fn uninstall(args: &ServiceUnitArgs, dry_run: bool, json: bool) -> Result<u8> {
     let existing = existing_managed_unit(&unit_path)?;
 
     if dry_run {
+        if existing.is_some() {
+            ensure_manager_resolves_to_managed_unit(&unit_name, &unit_path, false)?;
+        }
         print_report(
             json,
             ServiceReport {
@@ -174,6 +177,8 @@ fn uninstall(args: &ServiceUnitArgs, dry_run: bool, json: bool) -> Result<u8> {
     }
 
     ensure_systemd_user_available()?;
+    run_systemctl_checked(&["daemon-reload"])?;
+    ensure_manager_resolves_to_managed_unit(&unit_name, &unit_path, true)?;
     run_systemctl_checked(&["disable", "--now", &unit_name])?;
     fs::remove_file(&unit_path)
         .with_context(|| format!("failed to remove {}", unit_path.display()))?;
@@ -202,6 +207,7 @@ fn systemctl_unit_action(
     let unit_name = normalize_unit_name(&args.unit_name)?;
     let unit_path = unit_path(&unit_name)?;
     ensure_managed_unit_installed(&unit_path)?;
+    ensure_manager_resolves_to_managed_unit(&unit_name, &unit_path, false)?;
     if dry_run {
         print_report(
             json,
@@ -217,6 +223,8 @@ fn systemctl_unit_action(
     }
 
     ensure_systemd_user_available()?;
+    run_systemctl_checked(&["daemon-reload"])?;
+    ensure_manager_resolves_to_managed_unit(&unit_name, &unit_path, true)?;
     run_systemctl_checked(&[action, &unit_name])?;
     print_report(
         json,
@@ -609,6 +617,27 @@ fn ensure_unit_name_is_available(spec: &UnitSpec, require_systemd: bool) -> Resu
         "refusing to shadow existing systemd user unit {} at {}",
         spec.unit_name,
         fragment_path.display()
+    );
+}
+
+fn ensure_manager_resolves_to_managed_unit(
+    unit_name: &str,
+    unit_path: &Path,
+    require_systemd: bool,
+) -> Result<()> {
+    let Some(fragment_path) = manager_unit_fragment_path(unit_name, require_systemd)? else {
+        if require_systemd {
+            bail!("systemd user manager does not resolve managed unit {unit_name}");
+        }
+        return Ok(());
+    };
+    if paths_match(&fragment_path, unit_path) {
+        return Ok(());
+    }
+    bail!(
+        "refusing to control systemd user unit {unit_name}; manager resolves it to {} instead of managed unit {}",
+        fragment_path.display(),
+        unit_path.display()
     );
 }
 
