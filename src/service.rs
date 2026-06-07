@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::{
+    adapters,
     cli::{ServiceCommand, ServiceInstallArgs, ServiceUnitArgs},
     config::{self, LoadedConfig},
 };
@@ -62,6 +63,8 @@ fn install(
     json: bool,
 ) -> Result<u8> {
     ensure_service_scan_paths_are_absolute(&loaded.config)?;
+    adapters::enabled_adapters(&loaded.config)
+        .context("service install requires valid adapters")?;
     loaded
         .config
         .scan_scope(loaded.existed, &[])
@@ -125,6 +128,7 @@ fn install(
 fn uninstall(args: &ServiceUnitArgs, dry_run: bool, json: bool) -> Result<u8> {
     let unit_name = normalize_unit_name(&args.unit_name)?;
     let unit_path = unit_path(&unit_name)?;
+    let existing = existing_managed_unit(&unit_path)?;
 
     if dry_run {
         print_report(
@@ -134,36 +138,28 @@ fn uninstall(args: &ServiceUnitArgs, dry_run: bool, json: bool) -> Result<u8> {
                 unit_name,
                 unit_path,
                 dry_run,
-                message: "would remove managed systemd user unit".to_string(),
+                message: if existing.is_some() {
+                    "would remove managed systemd user unit".to_string()
+                } else {
+                    "systemd user unit is not installed".to_string()
+                },
             },
         )?;
         return Ok(0);
     }
 
-    let existing = match fs::read_to_string(&unit_path) {
-        Ok(existing) => existing,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            print_report(
-                json,
-                ServiceReport {
-                    action: "uninstall".to_string(),
-                    unit_name,
-                    unit_path,
-                    dry_run,
-                    message: "systemd user unit is not installed".to_string(),
-                },
-            )?;
-            return Ok(0);
-        }
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to read {}", unit_path.display()));
-        }
-    };
-    if !is_managed_unit(&existing) {
-        bail!(
-            "refusing to remove unmanaged systemd user unit {}",
-            unit_path.display()
-        );
+    if existing.is_none() {
+        print_report(
+            json,
+            ServiceReport {
+                action: "uninstall".to_string(),
+                unit_name,
+                unit_path,
+                dry_run,
+                message: "systemd user unit is not installed".to_string(),
+            },
+        )?;
+        return Ok(0);
     }
 
     ensure_systemd_user_available()?;
@@ -386,6 +382,7 @@ fn quote_systemd_arg(value: &str) -> String {
             '\\' => quoted.push_str("\\\\"),
             '"' => quoted.push_str("\\\""),
             '%' => quoted.push_str("%%"),
+            '$' => quoted.push_str("$$"),
             _ => quoted.push(ch),
         }
     }
@@ -398,23 +395,50 @@ fn is_managed_unit(text: &str) -> bool {
 }
 
 fn ensure_existing_unit_is_managed_or_absent(unit_path: &Path) -> Result<()> {
-    match fs::read_to_string(unit_path) {
-        Ok(existing) if !is_managed_unit(&existing) => {
-            bail!(
-                "refusing to overwrite unmanaged systemd user unit {}",
-                unit_path.display()
-            );
-        }
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+    existing_managed_unit(unit_path).map(|_| ())
+}
+
+fn existing_managed_unit(unit_path: &Path) -> Result<Option<String>> {
+    let metadata = match fs::symlink_metadata(unit_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             bail!(
-                "refusing to overwrite unreadable systemd user unit {}: {}",
+                "refusing to inspect systemd user unit {}: {}",
                 unit_path.display(),
                 error
             );
         }
+    };
+
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        bail!(
+            "refusing to use symlinked systemd user unit {}",
+            unit_path.display()
+        );
     }
+    if !metadata.is_file() {
+        bail!(
+            "refusing to use non-file systemd user unit {}",
+            unit_path.display()
+        );
+    }
+
+    let existing = fs::read_to_string(unit_path).map_err(|error| {
+        anyhow::anyhow!(
+            "refusing to read systemd user unit {}: {}",
+            unit_path.display(),
+            error
+        )
+    })?;
+    if !is_managed_unit(&existing) {
+        bail!(
+            "refusing to use unmanaged systemd user unit {}",
+            unit_path.display()
+        );
+    }
+    Ok(Some(existing))
 }
 
 fn ensure_linux() -> Result<()> {
@@ -539,19 +563,19 @@ mod tests {
         let spec = UnitSpec {
             unit_name: "claudemdeez.service".to_string(),
             unit_path: PathBuf::from("/home/user/.config/systemd/user/claudemdeez.service"),
-            config_path: PathBuf::from("/home/user/configs/claude\"mdeez.toml"),
-            bin_path: PathBuf::from("/home/user/bin/claude%mdeez"),
-            data_dir: PathBuf::from("/home/user/data%dir"),
+            config_path: PathBuf::from("/home/user/configs/claude\"mdeez$cfg.toml"),
+            bin_path: PathBuf::from("/home/user/bin/claude%mdeez$tool"),
+            data_dir: PathBuf::from("/home/user/data%dir$extra"),
         };
 
         let unit = build_unit(&spec);
 
         assert!(
             unit.contains(
-                "ExecStart=\"/home/user/bin/claude%%mdeez\" \"--config\" \"/home/user/configs/claude\\\"mdeez.toml\" \"watch\""
+                "ExecStart=\"/home/user/bin/claude%%mdeez$$tool\" \"--config\" \"/home/user/configs/claude\\\"mdeez$$cfg.toml\" \"watch\""
             )
         );
-        assert!(unit.contains("Environment=\"CLAUDEMDEEZ_DATA_DIR=/home/user/data%%dir\""));
+        assert!(unit.contains("Environment=\"CLAUDEMDEEZ_DATA_DIR=/home/user/data%%dir$$extra\""));
     }
 
     #[test]
@@ -573,7 +597,24 @@ mod tests {
 
         std::fs::write(&invalid_utf8, b"\xff").unwrap();
         let error = ensure_existing_unit_is_managed_or_absent(&invalid_utf8).unwrap_err();
-        assert!(error.to_string().contains("unreadable systemd user unit"));
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to read systemd user unit")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_unit_symlinks_are_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("target.service");
+        let link = temp.path().join("link.service");
+        std::fs::write(&target, format!("{MANAGED_MARKER}\n[Service]\n")).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let error = ensure_existing_unit_is_managed_or_absent(&link).unwrap_err();
+        assert!(error.to_string().contains("symlinked systemd user unit"));
     }
 
     #[test]
