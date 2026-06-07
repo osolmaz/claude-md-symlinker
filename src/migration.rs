@@ -279,7 +279,7 @@ fn apply_migration(
     }
 
     if git::is_tracked(&repo, claude_rel)? && options.git_add {
-        git_mv(&repo.root, claude_rel, agents_rel)?;
+        git_mv(&repo.root, claude_rel, agents_rel, options.replace_existing)?;
         fs::write(&candidate.agents_path, rewritten)
             .with_context(|| format!("failed to write {}", candidate.agents_path.display()))?;
         git_add(&repo.root, agents_rel)?;
@@ -318,8 +318,12 @@ fn apply_migration(
     Ok(())
 }
 
-fn git_mv(repo: &Path, from: &Path, to: &Path) -> Result<()> {
-    git_command(repo, &["mv", "--"], &[from, to])
+fn git_mv(repo: &Path, from: &Path, to: &Path, replace_existing: bool) -> Result<()> {
+    if replace_existing {
+        git_command(repo, &["mv", "-f", "--"], &[from, to])
+    } else {
+        git_command(repo, &["mv", "--"], &[from, to])
+    }
 }
 
 fn git_add(repo: &Path, path: &Path) -> Result<()> {
@@ -331,6 +335,7 @@ fn git_command(repo: &Path, args: &[&str], paths: &[&Path]) -> Result<()> {
     command
         .arg("-C")
         .arg(repo)
+        .arg("--literal-pathspecs")
         .args(args)
         .args(paths)
         .stdout(Stdio::null());

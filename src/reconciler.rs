@@ -89,10 +89,18 @@ pub fn apply_instruction_dir(
         false,
     )
     .unwrap_or_else(|error| {
-        (
-            result_for(repo, &adapter, Status::Error, error.to_string()),
-            false,
-        )
+        let message = error.to_string();
+        if !options.dry_run {
+            let _ = state.mark_instruction_result(instruction_dir, Some("error"), Some(&message));
+            let _ = state.record_event(
+                "error",
+                Some(&repo.root),
+                Some(&adapter.name),
+                "error",
+                &message,
+            );
+        }
+        (result_for(repo, &adapter, Status::Error, message), false)
     });
     if exclude_updated {
         report.summary.exclude_updates += 1;

@@ -78,7 +78,7 @@ fn purge_one(state: &State, shim: &ManagedShim, dry_run: bool) -> Result<Option<
     if !dry_run {
         materializer::remove_target(&repo, &adapter, false)?;
         exclude::remove(&repo, &adapter.target, ExcludeMode::PerRepo, false)?;
-        state.mark_shim_removed(&adapter.target.to_string_lossy())?;
+        state.mark_shim_removed(shim.id)?;
     }
     Ok(Some(target))
 }

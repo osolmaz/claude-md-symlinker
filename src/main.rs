@@ -87,12 +87,23 @@ fn run() -> Result<u8> {
         }
         cli::Command::Uninstall(uninstall_args) => {
             let state = command_state(args.dry_run)?;
-            let _report = install::uninstall(&uninstall_args, args.dry_run, args.json)?;
-            if uninstall_args.purge {
-                let purge_report = purge::purge(&state, args.dry_run)?;
-                if args.json {
-                    println!("{}", serde_json::to_string_pretty(&purge_report)?);
-                } else {
+            let uninstall_report = install::uninstall_report(&uninstall_args, args.dry_run)?;
+            let purge_report = if uninstall_args.purge {
+                Some(purge::purge(&state, args.dry_run)?)
+            } else {
+                None
+            };
+            if args.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "uninstall": uninstall_report,
+                        "purge": purge_report,
+                    }))?
+                );
+            } else {
+                install::print_uninstall(&uninstall_report);
+                if let Some(purge_report) = &purge_report {
                     println!("Purged {} managed shims.", purge_report.removed.len());
                 }
             }

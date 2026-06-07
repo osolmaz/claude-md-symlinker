@@ -117,6 +117,16 @@ pub fn install(args: &InstallArgs, state: &State, dry_run: bool, json: bool) -> 
 }
 
 pub fn uninstall(args: &UninstallArgs, dry_run: bool, json: bool) -> Result<UninstallReport> {
+    let report = uninstall_report(args, dry_run)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print_uninstall(&report);
+    }
+    Ok(report)
+}
+
+pub fn uninstall_report(args: &UninstallArgs, dry_run: bool) -> Result<UninstallReport> {
     let hooks = if args.no_hooks {
         ActionReport {
             changed: false,
@@ -141,11 +151,6 @@ pub fn uninstall(args: &UninstallArgs, dry_run: bool, json: bool) -> Result<Unin
         purged: args.purge,
         dry_run,
     };
-    if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        print_uninstall(&report);
-    }
     Ok(report)
 }
 
@@ -381,7 +386,7 @@ pub fn uninstall_service(unit_name_override: Option<&str>, dry_run: bool) -> Res
     ensure_linux()?;
     let unit_name = unit_name(unit_name_override)?;
     let path = unit_path(unit_name.clone())?;
-    let exists = path.exists();
+    let exists = fs::symlink_metadata(&path).is_ok();
     if exists {
         ensure_existing_unit_is_managed_or_absent(&path)?;
     }
@@ -647,10 +652,20 @@ fn systemd_user_dir() -> Result<PathBuf> {
 }
 
 fn ensure_existing_unit_is_managed_or_absent(path: &Path) -> Result<()> {
-    if !path.exists() {
-        return Ok(());
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        bail!(
+            "refusing to modify symlinked systemd unit {}",
+            path.display()
+        );
     }
-    if existing_unit_is_managed(path)? {
+    if metadata.is_file() && existing_unit_is_managed(path)? {
         return Ok(());
     }
     bail!(
@@ -660,6 +675,16 @@ fn ensure_existing_unit_is_managed_or_absent(path: &Path) -> Result<()> {
 }
 
 fn existing_unit_is_managed(path: &Path) -> Result<bool> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Ok(false);
+    }
     let text =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     Ok(text.lines().any(|line| line == UNIT_MARKER))
@@ -770,7 +795,7 @@ fn print_install(report: &InstallReport) {
     }
 }
 
-fn print_uninstall(report: &UninstallReport) {
+pub fn print_uninstall(report: &UninstallReport) {
     if report.dry_run {
         println!("Dry run. No filesystem changes were made.");
     }

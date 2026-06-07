@@ -91,6 +91,7 @@ pub struct DetectedClaudeFile {
 
 #[derive(Debug, Clone)]
 pub struct ManagedShim {
+    pub id: i64,
     pub repo_root: PathBuf,
     pub instruction_dir: PathBuf,
     pub source_rel_path: PathBuf,
@@ -431,7 +432,7 @@ impl State {
         };
         let mut statement = conn.prepare(
             r#"
-            SELECT r.root_path, d.instruction_dir, s.source_rel_path, s.target_rel_path, s.materialization
+            SELECT s.id, r.root_path, d.instruction_dir, s.source_rel_path, s.target_rel_path, s.materialization
             FROM shims s
             JOIN observed_instruction_dirs d ON d.id = s.instruction_dir_id
             JOIN observed_repositories r ON r.id = d.repository_id
@@ -444,11 +445,12 @@ impl State {
         )?;
         let rows = statement.query_map([], |row| {
             Ok(ManagedShim {
-                repo_root: PathBuf::from(row.get::<_, String>(0)?),
-                instruction_dir: PathBuf::from(row.get::<_, String>(1)?),
-                source_rel_path: PathBuf::from(row.get::<_, String>(2)?),
-                target_rel_path: PathBuf::from(row.get::<_, String>(3)?),
-                materialization: row.get(4)?,
+                id: row.get(0)?,
+                repo_root: PathBuf::from(row.get::<_, String>(1)?),
+                instruction_dir: PathBuf::from(row.get::<_, String>(2)?),
+                source_rel_path: PathBuf::from(row.get::<_, String>(3)?),
+                target_rel_path: PathBuf::from(row.get::<_, String>(4)?),
+                materialization: row.get(5)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -640,13 +642,13 @@ impl State {
         Ok(())
     }
 
-    pub fn mark_shim_removed(&self, target_rel_path: &str) -> Result<()> {
+    pub fn mark_shim_removed(&self, shim_id: i64) -> Result<()> {
         let Some(conn) = &self.conn else {
             return Ok(());
         };
         conn.execute(
-            "UPDATE shims SET removed_at = CURRENT_TIMESTAMP WHERE target_rel_path = ?1 AND removed_at IS NULL",
-            params![target_rel_path],
+            "UPDATE shims SET removed_at = CURRENT_TIMESTAMP WHERE id = ?1 AND removed_at IS NULL",
+            params![shim_id],
         )?;
         Ok(())
     }
