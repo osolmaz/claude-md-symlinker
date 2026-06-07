@@ -9,6 +9,7 @@ pub mod git;
 pub mod materializer;
 pub mod reconciler;
 pub mod reporting;
+pub mod service;
 pub mod state;
 pub mod watch;
 

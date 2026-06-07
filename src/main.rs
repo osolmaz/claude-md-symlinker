@@ -7,6 +7,7 @@ use claudemdeez::{
     doctor::DoctorReport,
     reconciler::{self, ReconcileOptions},
     reporting::{print_json, print_plain},
+    service,
     state::State,
     watch,
 };
@@ -122,6 +123,19 @@ fn run() -> Result<u8> {
             let state = command_state(args.dry_run)?;
             watch::run(loaded, &watch_args.roots, &state, args.dry_run, args.json)?;
             Ok(0)
+        }
+        cli::Command::Service(service_args) => {
+            let loaded = if matches!(&service_args.command, cli::ServiceCommand::Install(_)) {
+                Some(config::load(args.config.as_deref())?)
+            } else {
+                None
+            };
+            service::run(
+                &service_args.command,
+                loaded.as_ref(),
+                args.dry_run,
+                args.json,
+            )
         }
     }
 }

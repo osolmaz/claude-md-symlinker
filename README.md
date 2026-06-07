@@ -114,6 +114,18 @@ Runs the same reconciliation on startup, on relevant file events, and
 periodically. Watching is only a trigger; `apply` is the source of truth.
 
 ```sh
+claudemdeez service install
+claudemdeez service start
+claudemdeez service status
+claudemdeez service stop
+claudemdeez service uninstall
+```
+
+Installs and manages a Linux `systemd --user` service that runs
+`claudemdeez watch`. Service installation never uses root and never broadens
+your configured scan roots.
+
+```sh
 claudemdeez doctor
 ```
 
@@ -245,6 +257,53 @@ Managed copies start with:
 ```
 
 Edit `AGENTS.md`, not generated shims.
+
+## Linux User Service
+
+On Linux, CLAUDE.mdeez can install a user-scoped systemd service for automatic
+repair. Install the binary first, initialize your scan roots, then install and
+start the service:
+
+```sh
+cargo install --git https://github.com/dutifuldev/claudemdeez
+claudemdeez init ~/repos ~/work
+claudemdeez service install
+claudemdeez service start
+```
+
+The installer writes:
+
+```text
+~/.config/systemd/user/claudemdeez.service
+```
+
+The unit runs:
+
+```sh
+claudemdeez --config <your-config> watch
+```
+
+Service install requires absolute scan paths, including paths written with
+`~`. Running `claudemdeez init` stores canonical absolute roots.
+
+Useful service commands:
+
+```sh
+claudemdeez service status
+claudemdeez service restart
+claudemdeez service stop
+claudemdeez service uninstall
+```
+
+`service install` refuses to run when no scan roots are configured. If you use
+an explicit config path, pass it during installation:
+
+```sh
+claudemdeez --config ~/.config/claudemdeez/work.toml service install
+```
+
+The generated unit includes a CLAUDE.mdeez marker. `service uninstall` removes
+only managed units and refuses to remove unknown user unit files.
 
 ## Exit Codes
 

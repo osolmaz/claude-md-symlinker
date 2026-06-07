@@ -1,8 +1,9 @@
 # CLAUDE.mdeez Implementation Plan
 
-Status: core implementation complete and merged. The next implementation target
-is Linux `systemd --user` service/timer support for `claudemdeez watch`.
-Packaging follow-ups remain deferred until command behavior is stable.
+Status: core implementation complete and merged. Linux `systemd --user`
+service support for `claudemdeez watch` is implemented in the current
+iteration. Packaging follow-ups remain deferred until command behavior is
+stable.
 
 ## Goal
 

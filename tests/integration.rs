@@ -2958,6 +2958,1095 @@ fn watch_honors_json_output_flag() {
     assert!(!output.contains("Scanned "));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_requires_configured_roots() {
+    let fixture = Fixture::new();
+    let config_path = fixture.root.path().join("service-empty.toml");
+    fs::write(&config_path, "[scan]\nroots = []\n").unwrap();
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("service install requires configured scan roots"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_rejects_relative_scan_paths() {
+    let fixture = Fixture::new();
+    let config_path = fixture.root.path().join("service-relative.toml");
+    fs::write(&config_path, "[scan]\nroots = [\".\"]\n").unwrap();
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .current_dir(fixture.root.path())
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("service install requires absolute scan paths"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_rejects_option_like_unit_name() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name=-foo",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("service unit name must not start with '-'"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_rejects_empty_service_basename() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            ".service",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("service unit name must include a name before `.service`"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_treats_empty_xdg_config_home_as_unset() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let home = fixture.root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let path = fake_systemctl_path_failing_show_env(&fixture);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", "")
+        .env("HOME", &home)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(
+            home.join(".config/systemd/user/claudemdeez-test.service")
+                .to_str()
+                .unwrap()
+        )
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_rejects_control_characters_in_unit_values() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let config_path = fixture.root.path().join("service\nbad.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_path = xdg_config_home
+        .join("systemd/user")
+        .join("claudemdeez-test.service");
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("service config path must not contain control characters"));
+    assert!(!unit_path.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_uses_manager_unit_path_with_escaped_spaces() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg config");
+    let unit_path = xdg_config_home
+        .join("systemd/user")
+        .join("claudemdeez-test.service");
+    let unit_path_token = systemd_show_path_token(&xdg_config_home);
+    let path = fake_systemctl_path(
+        &fixture,
+        &format!(
+            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{unit_path_token}/systemd/user.control /run/user/1000/systemd/user.control {unit_path_token}/systemd/user /etc/systemd/user\"; exit 0; fi\nif [ \"$2\" = \"show\" ]; then printf '%s\\n\\n' not-found; exit 0; fi\nexit 0\n"
+        ),
+    );
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(unit_path.to_str().unwrap()));
+    assert!(!stdout.contains("\\x20"));
+    assert!(!unit_path.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_rejects_systemd_unsafe_binary_path() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_path = xdg_config_home
+        .join("systemd/user")
+        .join("claudemdeez-test.service");
+    let bin_path = fixture.root.path().join("bin/claude'mdeez");
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+            "--bin",
+            bin_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("service binary path contains characters systemd cannot use"));
+    assert!(!unit_path.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_rejects_missing_binary_path() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_path = xdg_config_home
+        .join("systemd/user")
+        .join("claudemdeez-test.service");
+    let bin_path = fixture.root.path().join("bin/missing-claudemdeez");
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+            "--bin",
+            bin_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("failed to inspect service binary"));
+    assert!(!unit_path.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_rejects_non_executable_binary_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_path = xdg_config_home
+        .join("systemd/user")
+        .join("claudemdeez-test.service");
+    let bin_path = fixture.root.path().join("bin/claudemdeez");
+    fs::create_dir_all(bin_path.parent().unwrap()).unwrap();
+    fs::write(&bin_path, "#!/bin/sh\n").unwrap();
+    fs::set_permissions(&bin_path, fs::Permissions::from_mode(0o644)).unwrap();
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+            "--bin",
+            bin_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("service binary path is not executable"));
+    assert!(!unit_path.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_dry_run_refuses_unit_lookup_conflict() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_path = xdg_config_home
+        .join("systemd/user")
+        .join("claudemdeez-test.service");
+    let unit_path_token = systemd_show_path_token(&xdg_config_home);
+    let existing_unit = fixture
+        .root
+        .path()
+        .join("usr/lib/systemd/user/claudemdeez-test.service");
+    fs::create_dir_all(existing_unit.parent().unwrap()).unwrap();
+    fs::write(&existing_unit, "[Service]\nExecStart=/bin/true\n").unwrap();
+    let path = fake_systemctl_path(
+        &fixture,
+        &format!(
+            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{unit_path_token}/systemd/user.control {unit_path_token}/systemd/user {}\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claudemdeez-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nexit 0\n",
+            existing_unit.parent().unwrap().display(),
+            existing_unit.display()
+        ),
+    );
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refusing to shadow existing systemd user unit"));
+    assert!(stderr.contains(existing_unit.to_str().unwrap()));
+    assert!(!unit_path.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_rejects_disabled_watch_config() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let config_path = fixture.root.path().join("service-watch-disabled.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[scan]\nroots = [\"{}\"]\n\n[watch]\nenabled = false\n",
+            repo.display()
+        ),
+    )
+    .unwrap();
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("service install requires watch to be enabled"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_dry_run_validates_git_exclude_mode() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let config_path = fixture.root.path().join("service-global-exclude.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[scan]\nroots = [\"{}\"]\n\n[git]\nexclude_mode = \"global\"\n",
+            repo.display()
+        ),
+    )
+    .unwrap();
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("service install requires valid Git exclude mode"));
+    assert!(stderr.contains("global exclude mode is disabled"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_dry_run_does_not_write_unit() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_path = xdg_config_home
+        .join("systemd/user")
+        .join("claudemdeez-test.service");
+    let bin_path = fixture.root.path().join("bin/claudemdeez");
+    let data_dir = fixture.root.path().join("data");
+    fs::create_dir_all(bin_path.parent().unwrap()).unwrap();
+    fs::write(&bin_path, "#!/bin/sh\n").unwrap();
+    make_executable(&bin_path);
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+            "--bin",
+            bin_path.to_str().unwrap(),
+            "--data-dir",
+            data_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("would write systemd user unit"));
+    assert!(stdout.contains("claudemdeez-test.service"));
+    assert!(!unit_path.exists());
+    assert!(!data_dir.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_dry_run_rejects_unwritable_data_dir_parent() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_path = xdg_config_home
+        .join("systemd/user")
+        .join("claudemdeez-test.service");
+    let data_parent = fixture.root.path().join("readonly-data-parent");
+    let data_dir = data_parent.join("data");
+    fs::create_dir_all(&data_parent).unwrap();
+    let original_permissions = fs::metadata(&data_parent).unwrap().permissions();
+    fs::set_permissions(&data_parent, fs::Permissions::from_mode(0o555)).unwrap();
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+            "--data-dir",
+            data_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    fs::set_permissions(&data_parent, original_permissions).unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("service data directory parent"));
+    assert!(stderr.contains("is not writable"));
+    assert!(!unit_path.exists());
+    assert!(!data_dir.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_creates_service_data_dir_before_writing_unit() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_path = xdg_config_home
+        .join("systemd/user")
+        .join("claudemdeez-test.service");
+    let data_dir = fixture.root.path().join("missing-data/claudemdeez");
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+            "--data-dir",
+            data_dir.to_str().unwrap(),
+            "--no-enable",
+        ])
+        .output()
+        .expect("service install runs");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(data_dir.is_dir());
+    assert!(unit_path.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_now_restarts_existing_unit() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_dir = xdg_config_home.join("systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let unit_path = unit_dir.join("claudemdeez-test.service");
+    fs::write(
+        &unit_path,
+        "# claudemdeez managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
+    )
+    .unwrap();
+    let log_path = fixture.root.path().join("systemctl.log");
+    let path = fake_systemctl_path(
+        &fixture,
+        &format!(
+            "#!/bin/sh\necho \"$@\" >> {}\nif [ \"$2\" = \"show-environment\" ]; then echo XDG_CONFIG_HOME={}; exit 0; fi\nexit 0\n",
+            log_path.display(),
+            xdg_config_home.display()
+        ),
+    );
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+            "--now",
+        ])
+        .output()
+        .expect("service install runs");
+
+    assert_eq!(output.status.code(), Some(0));
+    let log = fs::read_to_string(log_path).unwrap();
+    assert!(log.contains("--user restart claudemdeez-test.service"));
+    assert!(!log.contains("--user start claudemdeez-test.service"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_dry_run_rejects_unwritable_unit_dir() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_dir = xdg_config_home.join("systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
+    let original_permissions = fs::metadata(&unit_dir).unwrap().permissions();
+    fs::set_permissions(&unit_dir, fs::Permissions::from_mode(0o555)).unwrap();
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    fs::set_permissions(&unit_dir, original_permissions).unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("systemd user unit parent"));
+    assert!(stderr.contains("is not writable"));
+    assert!(!unit_dir.join("claudemdeez-test.service").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_dry_run_rejects_readonly_managed_unit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_dir = xdg_config_home.join("systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let unit_path = unit_dir.join("claudemdeez-test.service");
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
+    fs::write(
+        &unit_path,
+        "# claudemdeez managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
+    )
+    .unwrap();
+    let original_permissions = fs::metadata(&unit_path).unwrap().permissions();
+    fs::set_permissions(&unit_path, fs::Permissions::from_mode(0o444)).unwrap();
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    fs::set_permissions(&unit_path, original_permissions).unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("systemd user unit"));
+    assert!(stderr.contains("is not writable"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_dry_run_refuses_unmanaged_unit_conflict() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_dir = xdg_config_home.join("systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let unit_path = unit_dir.join("claudemdeez-test.service");
+    fs::write(&unit_path, "[Service]\nExecStart=/bin/true\n").unwrap();
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refusing to use unmanaged systemd user unit"));
+    assert_eq!(
+        fs::read_to_string(&unit_path).unwrap(),
+        "[Service]\nExecStart=/bin/true\n"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_start_dry_run_requires_managed_unit() {
+    let fixture = Fixture::new();
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--dry-run",
+            "service",
+            "start",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service start dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("managed systemd user unit is not installed"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_start_dry_run_refuses_unmanaged_unit_conflict() {
+    let fixture = Fixture::new();
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_dir = xdg_config_home.join("systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let unit_path = unit_dir.join("claudemdeez-test.service");
+    fs::write(&unit_path, "[Service]\nExecStart=/bin/true\n").unwrap();
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--dry-run",
+            "service",
+            "start",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service start dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refusing to use unmanaged systemd user unit"));
+    assert_eq!(
+        fs::read_to_string(&unit_path).unwrap(),
+        "[Service]\nExecStart=/bin/true\n"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_start_dry_run_refuses_unit_lookup_conflict() {
+    let fixture = Fixture::new();
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_dir = xdg_config_home.join("systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let unit_path = unit_dir.join("claudemdeez-test.service");
+    fs::write(
+        &unit_path,
+        "# claudemdeez managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
+    )
+    .unwrap();
+    let unit_path_token = systemd_show_path_token(&xdg_config_home);
+    let transient_unit = fixture
+        .root
+        .path()
+        .join("run/user/1000/systemd/transient/claudemdeez-test.service");
+    let path = fake_systemctl_path(
+        &fixture,
+        &format!(
+            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{unit_path_token}/systemd/user.control {unit_path_token}/systemd/user {}\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claudemdeez-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nexit 0\n",
+            transient_unit.parent().unwrap().display(),
+            transient_unit.display()
+        ),
+    );
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--dry-run",
+            "service",
+            "start",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service start dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refusing to control systemd user unit"));
+    assert!(stderr.contains(transient_unit.to_str().unwrap()));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_uninstall_dry_run_refuses_unmanaged_unit_conflict() {
+    let fixture = Fixture::new();
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_dir = xdg_config_home.join("systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let unit_path = unit_dir.join("claudemdeez-test.service");
+    fs::write(&unit_path, "[Service]\nExecStart=/bin/true\n").unwrap();
+    let path = fake_systemctl_path_with_xdg(&fixture, &xdg_config_home);
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--dry-run",
+            "service",
+            "uninstall",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service uninstall dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refusing to use unmanaged systemd user unit"));
+    assert_eq!(
+        fs::read_to_string(&unit_path).unwrap(),
+        "[Service]\nExecStart=/bin/true\n"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_uninstall_dry_run_refuses_unit_lookup_conflict() {
+    let fixture = Fixture::new();
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_dir = xdg_config_home.join("systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let unit_path = unit_dir.join("claudemdeez-test.service");
+    fs::write(
+        &unit_path,
+        "# claudemdeez managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
+    )
+    .unwrap();
+    let unit_path_token = systemd_show_path_token(&xdg_config_home);
+    let transient_unit = fixture
+        .root
+        .path()
+        .join("run/user/1000/systemd/transient/claudemdeez-test.service");
+    let path = fake_systemctl_path(
+        &fixture,
+        &format!(
+            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{unit_path_token}/systemd/user.control {unit_path_token}/systemd/user {}\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claudemdeez-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nexit 0\n",
+            transient_unit.parent().unwrap().display(),
+            transient_unit.display()
+        ),
+    );
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args([
+            "--dry-run",
+            "service",
+            "uninstall",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service uninstall dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refusing to control systemd user unit"));
+    assert!(stderr.contains(transient_unit.to_str().unwrap()));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_uninstall_surfaces_disable_failure() {
+    let fixture = Fixture::new();
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_dir = xdg_config_home.join("systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let unit_path = unit_dir.join("claudemdeez-test.service");
+    fs::write(
+        &unit_path,
+        "# claudemdeez managed systemd user unit\n[Service]\nExecStart=/bin/true\n",
+    )
+    .unwrap();
+    let fake_bin_dir = fixture.root.path().join("bin");
+    fs::create_dir_all(&fake_bin_dir).unwrap();
+    let fake_systemctl = fake_bin_dir.join("systemctl");
+    fs::write(
+        &fake_systemctl,
+        format!(
+            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{}/systemd/user.control {}/systemd/user\"; exit 0; fi\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"claudemdeez-test.service\" ]; then printf '%s\\n%s\\n' loaded \"{}\"; exit 0; fi\nif [ \"$2\" = \"show-environment\" ]; then echo XDG_CONFIG_HOME={}; exit 0; fi\nif [ \"$2\" = \"disable\" ]; then echo disable failed >&2; exit 42; fi\nexit 0\n",
+            xdg_config_home.display(),
+            xdg_config_home.display(),
+            unit_path.display(),
+            xdg_config_home.display()
+        ),
+    )
+    .unwrap();
+    make_executable(&fake_systemctl);
+    let path = format!(
+        "{}:{}",
+        fake_bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("PATH", path)
+        .args(["service", "uninstall", "--unit-name", "claudemdeez-test"])
+        .output()
+        .expect("service uninstall runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("systemctl --user disable --now claudemdeez-test.service failed"));
+    assert!(stderr.contains("disable failed"));
+    assert!(unit_path.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_install_dry_run_validates_adapter_config() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("service-invalid-adapter.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[scan]\nroots = [\"{}\"]\n\n[adapters.claude]\ntarget = \"../CLAUDE.md\"\n",
+            repo.display()
+        ),
+    )
+    .unwrap();
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("service install requires valid adapters"));
+    assert!(stderr.contains("must stay inside the repository root"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_control_commands_do_not_require_valid_config() {
+    let fixture = Fixture::new();
+    let config_path = fixture.root.path().join("bad-service-config.toml");
+    fs::write(&config_path, "not valid toml =").unwrap();
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let uninstall = Command::new(bin)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "uninstall",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service uninstall dry-run runs");
+
+    assert_eq!(uninstall.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&uninstall.stdout);
+    assert!(stdout.contains("systemd user unit is not installed"));
+
+    let install = Command::new(bin)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(install.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&install.stderr);
+    assert!(stderr.contains("failed to parse config"));
+}
+
 #[test]
 fn clean_invalid_exclude_leaves_managed_target_in_place() {
     let fixture = Fixture::new();
@@ -3558,6 +4647,54 @@ fn write_config_roots(path: &Path, roots: &[&Path]) {
         .collect::<Vec<_>>()
         .join(", ");
     fs::write(path, format!("[scan]\nroots = [{roots}]\n")).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+fn fake_systemctl_path_with_xdg(fixture: &Fixture, xdg_config_home: &Path) -> String {
+    let unit_path_token = systemd_show_path_token(xdg_config_home);
+    fake_systemctl_path(
+        fixture,
+        &format!(
+            "#!/bin/sh\nif [ \"$2\" = \"show\" ] && [ \"$3\" = \"--property=UnitPath\" ]; then printf '%s\\n' \"{unit_path_token}/systemd/user.control /run/user/1000/systemd/user.control {unit_path_token}/systemd/user /etc/systemd/user\"; exit 0; fi\nif [ \"$2\" = \"show\" ]; then printf '%s\\n\\n' not-found; exit 0; fi\nif [ \"$2\" = \"show-environment\" ]; then echo XDG_CONFIG_HOME={}; exit 0; fi\nexit 0\n",
+            xdg_config_home.display()
+        ),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn fake_systemctl_path_failing_show_env(fixture: &Fixture) -> String {
+    fake_systemctl_path(
+        fixture,
+        "#!/bin/sh\nif [ \"$2\" = \"show\" ]; then exit 1; fi\nif [ \"$2\" = \"show-environment\" ]; then exit 1; fi\nexit 0\n",
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn systemd_show_path_token(path: &Path) -> String {
+    path.display().to_string().replace(' ', "\\x20")
+}
+
+#[cfg(target_os = "linux")]
+fn fake_systemctl_path(fixture: &Fixture, script: &str) -> String {
+    let fake_bin_dir = fixture.root.path().join("fake-systemctl-bin");
+    fs::create_dir_all(&fake_bin_dir).unwrap();
+    let fake_systemctl = fake_bin_dir.join("systemctl");
+    fs::write(&fake_systemctl, script).unwrap();
+    make_executable(&fake_systemctl);
+    format!(
+        "{}:{}",
+        fake_bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    )
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
 }
 
 fn deep_relative_path(component: &str, depth: usize, file_name: &str) -> PathBuf {
