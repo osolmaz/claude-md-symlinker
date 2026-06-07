@@ -2984,6 +2984,32 @@ fn service_install_requires_configured_roots() {
 }
 
 #[test]
+fn service_install_rejects_relative_scan_paths() {
+    let fixture = Fixture::new();
+    let config_path = fixture.root.path().join("service-relative.toml");
+    fs::write(&config_path, "[scan]\nroots = [\".\"]\n").unwrap();
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .current_dir(fixture.root.path())
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("service install requires absolute scan paths"));
+}
+
+#[test]
 fn service_install_dry_run_does_not_write_unit() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
@@ -3021,6 +3047,43 @@ fn service_install_dry_run_does_not_write_unit() {
     assert!(stdout.contains("would write systemd user unit"));
     assert!(stdout.contains("claudemdeez-test.service"));
     assert!(!unit_path.exists());
+}
+
+#[test]
+fn service_install_dry_run_refuses_unmanaged_unit_conflict() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("service.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let xdg_config_home = fixture.root.path().join("xdg-config");
+    let unit_dir = xdg_config_home.join("systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let unit_path = unit_dir.join("claudemdeez-test.service");
+    fs::write(&unit_path, "[Service]\nExecStart=/bin/true\n").unwrap();
+    let bin = env!("CARGO_BIN_EXE_claudemdeez");
+
+    let output = Command::new(bin)
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--dry-run",
+            "service",
+            "install",
+            "--unit-name",
+            "claudemdeez-test",
+        ])
+        .output()
+        .expect("service install dry-run runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refusing to overwrite unmanaged systemd user unit"));
+    assert_eq!(
+        fs::read_to_string(&unit_path).unwrap(),
+        "[Service]\nExecStart=/bin/true\n"
+    );
 }
 
 #[test]

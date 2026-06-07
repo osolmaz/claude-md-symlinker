@@ -283,6 +283,9 @@ The unit runs:
 claudemdeez --config <your-config> watch
 ```
 
+Service install requires absolute scan paths, including paths written with
+`~`. Running `claudemdeez init` stores canonical absolute roots.
+
 Useful service commands:
 
 ```sh

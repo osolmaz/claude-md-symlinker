@@ -61,12 +61,14 @@ fn install(
     dry_run: bool,
     json: bool,
 ) -> Result<u8> {
+    ensure_service_scan_paths_are_absolute(&loaded.config)?;
     loaded
         .config
         .scan_scope(loaded.existed, &[])
         .context("service install requires configured scan roots")?;
 
     let spec = install_spec(args, loaded)?;
+    ensure_existing_unit_is_managed_or_absent(&spec.unit_path)?;
     let unit = build_unit(&spec);
 
     if dry_run {
@@ -231,14 +233,15 @@ fn status(args: &ServiceUnitArgs, dry_run: bool, json: bool) -> Result<u8> {
         let active = if dry_run {
             None
         } else {
-            Some(systemctl_output(&["is-active", &unit_name])?)
+            Some(systemctl_output_status(&["is-active", &unit_name])?)
         };
         let message = active
-            .as_deref()
-            .map(str::trim)
+            .as_ref()
+            .map(|active| active.stdout.trim())
             .filter(|text| !text.is_empty())
             .unwrap_or("would query systemd user unit status")
             .to_string();
+        let exit_code = active.as_ref().map(|active| active.exit_code).unwrap_or(0);
         print_report(
             json,
             ServiceReport {
@@ -249,7 +252,7 @@ fn status(args: &ServiceUnitArgs, dry_run: bool, json: bool) -> Result<u8> {
                 message,
             },
         )?;
-        return Ok(0);
+        return Ok(exit_code);
     }
 
     ensure_systemd_user_available()?;
@@ -315,6 +318,23 @@ WantedBy=default.target
         quote_systemd_arg(&data_env),
         quote_systemd_arg("RUST_LOG=info")
     )
+}
+
+fn ensure_service_scan_paths_are_absolute(config: &config::AppConfig) -> Result<()> {
+    for path in config
+        .scan
+        .roots
+        .iter()
+        .chain(config.scan.include_paths.iter())
+        .chain(config.scan.exclude_paths.iter())
+    {
+        if !config::expand_tilde(path).is_absolute() {
+            bail!(
+                "service install requires absolute scan paths; run `claudemdeez init <root...>` to store canonical roots"
+            );
+        }
+    }
+    Ok(())
 }
 
 fn normalize_unit_name(name: &str) -> Result<String> {
@@ -437,13 +457,21 @@ fn run_systemctl_status(args: &[&str]) -> Result<i32> {
     Ok(status.code().unwrap_or(1))
 }
 
-fn systemctl_output(args: &[&str]) -> Result<String> {
+struct SystemctlOutput {
+    exit_code: u8,
+    stdout: String,
+}
+
+fn systemctl_output_status(args: &[&str]) -> Result<SystemctlOutput> {
     let output = Command::new("systemctl")
         .arg("--user")
         .args(args)
         .output()
         .with_context(|| format!("failed to run systemctl --user {}", args.join(" ")))?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(SystemctlOutput {
+        exit_code: output.status.code().unwrap_or(1) as u8,
+        stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    })
 }
 
 fn print_report(json: bool, report: ServiceReport) -> Result<()> {
@@ -466,8 +494,9 @@ mod tests {
 
     use super::{
         MANAGED_MARKER, UnitSpec, build_unit, ensure_existing_unit_is_managed_or_absent,
-        is_managed_unit, normalize_unit_name,
+        ensure_service_scan_paths_are_absolute, is_managed_unit, normalize_unit_name,
     };
+    use crate::config::AppConfig;
 
     #[test]
     fn unit_name_is_normalized_and_validated() {
@@ -545,5 +574,18 @@ mod tests {
         std::fs::write(&invalid_utf8, b"\xff").unwrap();
         let error = ensure_existing_unit_is_managed_or_absent(&invalid_utf8).unwrap_err();
         assert!(error.to_string().contains("unreadable systemd user unit"));
+    }
+
+    #[test]
+    fn service_scan_paths_must_be_absolute_after_tilde_expansion() {
+        let mut config = AppConfig::default();
+        config.scan.roots = vec![PathBuf::from("/workspace")];
+        config.scan.include_paths = vec![PathBuf::from("~/workspace/project")];
+        config.scan.exclude_paths = vec![PathBuf::from("/workspace/archive")];
+        assert!(ensure_service_scan_paths_are_absolute(&config).is_ok());
+
+        config.scan.roots = vec![PathBuf::from(".")];
+        let error = ensure_service_scan_paths_are_absolute(&config).unwrap_err();
+        assert!(error.to_string().contains("absolute scan paths"));
     }
 }
