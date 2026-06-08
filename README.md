@@ -1,7 +1,11 @@
 # claude-md-symlinker
 
-claude-md-symlinker keeps `AGENTS.md` as the real agent-instructions file and
-creates local `CLAUDE.md` compatibility shims for Claude Code.
+Anthropic wants Claude Code users to commit branded `CLAUDE.md` files into
+their repos. How about no?
+
+claude-md-symlinker lets you commit the tool-neutral `AGENTS.md` instead. It
+creates local `CLAUDE.md` compatibility shims for Claude Code, keeps those shims
+out of Git, and repairs them automatically when they disappear.
 
 The normal result is:
 
