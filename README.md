@@ -59,9 +59,11 @@ the binary and connects it to Claude Code.
 
 It does not scan your whole machine, home directory, or all repos.
 
-The one-line install enables safe auto-migration of existing `CLAUDE.md` files
-to `AGENTS.md` when Claude finds them while working. Auto-migration is still
-scoped only to directories Claude enters; it is not a global scan.
+The one-line install asks whether to enable safe auto-migration of existing
+`CLAUDE.md` files to `AGENTS.md` when Claude finds them while working. The
+default answer is yes. Auto-migration is still scoped only to directories
+Claude enters; it is not a global scan. In non-interactive installs, the
+installer uses the default yes.
 
 For manual setup choices after the binary is installed:
 

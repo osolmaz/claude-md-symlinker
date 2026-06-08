@@ -36,6 +36,10 @@ download_quiet() {
     curl -fsSL --retry 3 --retry-delay 2 "$url" -o "$output"
 }
 
+can_prompt() {
+    [ -r /dev/tty ] && [ -w /dev/tty ] && ( : < /dev/tty ) 2>/dev/null
+}
+
 home_dir() {
     if [ -n "${HOME:-}" ]; then
         printf '%s\n' "$HOME"
@@ -134,9 +138,16 @@ run_setup() {
 
     [ "${CLAUDE_MD_SYMLINKER_NO_SETUP:-0}" = "1" ] && return
 
-    auto_flag="--auto-migrate"
+    auto_flag=""
+    prompt_stdin=0
     if [ "${CLAUDE_MD_SYMLINKER_NO_AUTO_MIGRATE:-0}" = "1" ]; then
         auto_flag="--no-auto-migrate"
+    elif [ "${CLAUDE_MD_SYMLINKER_AUTO_MIGRATE:-0}" = "1" ]; then
+        auto_flag="--auto-migrate"
+    elif can_prompt; then
+        prompt_stdin=1
+    else
+        auto_flag="--auto-migrate"
     fi
 
     no_service=0
@@ -144,10 +155,18 @@ run_setup() {
         no_service=1
     fi
 
+    set -- install
     if [ "$no_service" = "1" ]; then
-        "$bin" install --no-service "$auto_flag"
+        set -- "$@" --no-service
+    fi
+    if [ -n "$auto_flag" ]; then
+        set -- "$@" "$auto_flag"
+    fi
+
+    if [ "$prompt_stdin" = "1" ]; then
+        "$bin" "$@" < /dev/tty
     else
-        "$bin" install "$auto_flag"
+        "$bin" "$@"
     fi
 }
 
