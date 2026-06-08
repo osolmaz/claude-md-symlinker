@@ -60,8 +60,7 @@ claude-md-symlinker must preserve these invariants:
 Normal setup:
 
 ```sh
-curl -fsSL https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh | sh
-claude-md-symlinker install
+curl -fsSL https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh | sh && case "$(uname -s)" in Darwin) "${CARGO_HOME:-$HOME/.cargo}/bin/claude-md-symlinker" install --no-service --auto-migrate ;; *) "${CARGO_HOME:-$HOME/.cargo}/bin/claude-md-symlinker" install --auto-migrate ;; esac
 ```
 
 After install:
@@ -199,7 +198,7 @@ The public install path should be a one-line shell installer backed by GitHub
 Releases:
 
 ```sh
-curl -fsSL https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh | sh
+curl -fsSL https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh | sh && case "$(uname -s)" in Darwin) "${CARGO_HOME:-$HOME/.cargo}/bin/claude-md-symlinker" install --no-service --auto-migrate ;; *) "${CARGO_HOME:-$HOME/.cargo}/bin/claude-md-symlinker" install --auto-migrate ;; esac
 ```
 
 Use `cargo-dist` for release packaging instead of a hand-rolled release
@@ -226,9 +225,9 @@ x86_64-apple-darwin
 aarch64-apple-darwin
 ```
 
-The installer only installs the binary. It must not silently edit Claude
-settings, install a service, or migrate files without running the tool's own
-explicit setup command.
+The cargo-dist installer only installs the binary. The documented one-liner
+must explicitly chain into the tool's own setup command before editing Claude
+settings, installing a service, or migrating files.
 
 Non-goals for distribution:
 
@@ -1137,8 +1136,7 @@ Implement this as one coherent product pass, not as staged feature releases.
 The end state should be usable with:
 
 ```sh
-curl -fsSL https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh | sh
-claude-md-symlinker install
+curl -fsSL https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh | sh && case "$(uname -s)" in Darwin) "${CARGO_HOME:-$HOME/.cargo}/bin/claude-md-symlinker" install --no-service --auto-migrate ;; *) "${CARGO_HOME:-$HOME/.cargo}/bin/claude-md-symlinker" install --auto-migrate ;; esac
 ```
 
 Single-pass checklist:

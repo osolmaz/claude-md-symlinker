@@ -41,35 +41,29 @@ Requirements:
 - Linux with `systemd --user` for the background repair service, or macOS in
   hook-only mode
 
-Install the prebuilt binary:
+Install:
 
 ```sh
-curl -fsSL https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh | sh
+curl -fsSL https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh | sh && case "$(uname -s)" in Darwin) "${CARGO_HOME:-$HOME/.cargo}/bin/claude-md-symlinker" install --no-service --auto-migrate ;; *) "${CARGO_HOME:-$HOME/.cargo}/bin/claude-md-symlinker" install --auto-migrate ;; esac
 ```
 
-This does not require Rust, Cargo, or compiling anything locally.
-
-Then connect it to Claude Code:
-
-```sh
-claude-md-symlinker install
-```
+This does not require Rust, Cargo, or compiling anything locally. It installs
+the binary and connects it to Claude Code.
 
 `install` does four things:
 
 - Adds managed Claude hooks to `~/.claude/settings.json`.
-- Starts a `systemd --user` repair service.
+- Starts a `systemd --user` repair service on Linux.
 - Creates local SQLite state.
 - Observes the current directory once.
 
 It does not scan your whole machine, home directory, or all repos.
 
-During install, it asks whether to automatically migrate safe existing
-`CLAUDE.md` files to `AGENTS.md` when Claude finds them while working. The
-default is yes. Auto-migration is still scoped only to directories Claude
-enters; it is not a global scan.
+The one-line install enables safe auto-migration of existing `CLAUDE.md` files
+to `AGENTS.md` when Claude finds them while working. Auto-migration is still
+scoped only to directories Claude enters; it is not a global scan.
 
-For noninteractive installs:
+For manual setup choices after the binary is installed:
 
 ```sh
 claude-md-symlinker install --auto-migrate
