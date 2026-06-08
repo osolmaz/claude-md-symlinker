@@ -60,9 +60,7 @@ claude-md-symlinker must preserve these invariants:
 Normal setup:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh \
-  | sh
+curl -fsSL https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh | sh
 claude-md-symlinker install
 ```
 
@@ -201,9 +199,7 @@ The public install path should be a one-line shell installer backed by GitHub
 Releases:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh \
-  | sh
+curl -fsSL https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh | sh
 ```
 
 Use `cargo-dist` for release packaging instead of a hand-rolled release
@@ -1141,9 +1137,7 @@ Implement this as one coherent product pass, not as staged feature releases.
 The end state should be usable with:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh \
-  | sh
+curl -fsSL https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh | sh
 claude-md-symlinker install
 ```
 
