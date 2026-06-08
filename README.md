@@ -38,7 +38,8 @@ Requirements:
 
 - Git
 - Claude Code with hooks enabled
-- Linux with `systemd --user` for the background repair service
+- Linux with `systemd --user` for the background repair service, or macOS in
+  hook-only mode
 
 Install the prebuilt binary:
 
