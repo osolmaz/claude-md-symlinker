@@ -22,6 +22,24 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Install Claude hooks and the Linux user service.
+    Install(InstallArgs),
+    /// Observe a Claude hook cwd and reconcile matching instruction files.
+    Observe(ObserveArgs),
+    /// Run the background repair daemon.
+    Daemon(DaemonArgs),
+    /// Show install and state health.
+    Status,
+    /// Manage observed repositories.
+    Repos(ReposArgs),
+    /// Migrate detected CLAUDE.md files to AGENTS.md.
+    Migrate(MigrateArgs),
+    /// Manage local settings stored in state.
+    Settings(SettingsArgs),
+    /// Remove managed shims recorded in state.
+    Purge(PurgeArgs),
+    /// Remove Claude hooks and the Linux user service.
+    Uninstall(UninstallArgs),
     /// Create or update config scan roots.
     Init(InitArgs),
     /// Reconcile configured or supplied roots.
@@ -34,6 +52,139 @@ pub enum Command {
     Clean(CleanArgs),
     /// Manage the Linux user service for watch mode.
     Service(ServiceArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct InstallArgs {
+    #[arg(long)]
+    pub no_service: bool,
+
+    #[arg(long)]
+    pub no_hooks: bool,
+
+    #[arg(long, conflicts_with = "no_auto_migrate")]
+    pub auto_migrate: bool,
+
+    #[arg(long, conflicts_with = "auto_migrate")]
+    pub no_auto_migrate: bool,
+
+    #[arg(long, hide = true)]
+    pub unit_name: Option<String>,
+
+    #[arg(long, hide = true)]
+    pub bin: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct ObserveArgs {
+    #[arg(long)]
+    pub no_apply: bool,
+
+    #[arg(long)]
+    pub strict: bool,
+
+    #[arg(long, hide = true)]
+    pub cwd: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct DaemonArgs {
+    #[arg(long, hide = true)]
+    pub once: bool,
+
+    #[arg(long, hide = true)]
+    pub interval_seconds: Option<u64>,
+
+    #[arg(long, hide = true)]
+    pub max_instruction_dirs: Option<usize>,
+
+    #[arg(long, hide = true)]
+    pub unit_name: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ReposArgs {
+    #[command(subcommand)]
+    pub command: ReposCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ReposCommand {
+    /// List observed repositories.
+    List,
+    /// Stop managing a repository.
+    Remove(ReposRemoveArgs),
+    /// Remove missing repositories and instruction directories from active scope.
+    Prune(ReposPruneArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ReposRemoveArgs {
+    pub repo: PathBuf,
+
+    #[arg(long)]
+    pub clean_exclude: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ReposPruneArgs {
+    #[arg(long)]
+    pub forget_history: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct MigrateArgs {
+    #[arg(long)]
+    pub auto_safe_only: bool,
+
+    #[arg(long)]
+    pub replace_existing: bool,
+
+    #[arg(long)]
+    pub no_git_add: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SettingsArgs {
+    #[command(subcommand)]
+    pub command: SettingsCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SettingsCommand {
+    /// Set a local setting.
+    Set(SettingsSetArgs),
+    /// Print a local setting.
+    Get(SettingsGetArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct SettingsSetArgs {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Args)]
+pub struct SettingsGetArgs {
+    pub key: String,
+}
+
+#[derive(Debug, Args)]
+pub struct PurgeArgs {}
+
+#[derive(Debug, Args)]
+pub struct UninstallArgs {
+    #[arg(long)]
+    pub purge: bool,
+
+    #[arg(long)]
+    pub no_service: bool,
+
+    #[arg(long)]
+    pub no_hooks: bool,
+
+    #[arg(long, hide = true)]
+    pub unit_name: Option<String>,
 }
 
 #[derive(Debug, Args)]

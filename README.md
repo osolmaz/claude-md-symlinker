@@ -1,29 +1,29 @@
 # claude-md-symlinker
 
-claude-md-symlinker keeps `AGENTS.md` as the canonical agent-instructions file and
-creates local compatibility files for tools that still expect their own
-instruction filename.
+claude-md-symlinker keeps `AGENTS.md` as the real agent-instructions file and
+creates local `CLAUDE.md` compatibility shims for Claude Code.
 
-The name is literal: it keeps Claude-compatible Markdown shims linked to the
-canonical `AGENTS.md` file.
-
-The built-in adapter is:
+The normal result is:
 
 ```text
-AGENTS.md -> CLAUDE.md
+AGENTS.md   # canonical file, committed to Git
+CLAUDE.md   # local generated shim, ignored by Git
 ```
 
-In repositories you opt into, `CLAUDE.md` is generated locally and ignored by
-Git only when claude-md-symlinker created or already owns it. If a repository already
-has a user-owned `CLAUDE.md`, claude-md-symlinker leaves it untouched and keeps it
-visible to Git.
+On systems with symlink support, the shim is:
+
+```text
+CLAUDE.md -> AGENTS.md
+```
 
 ## Install
 
 Requirements:
 
+- Linux with `systemd --user`
 - Rust stable
 - Git
+- Claude Code with hooks enabled
 
 Install from GitHub:
 
@@ -31,284 +31,207 @@ Install from GitHub:
 cargo install --git https://github.com/dutifuldev/claude-md-symlinker
 ```
 
-Or install from a local checkout:
+Then install the integration:
 
 ```sh
-git clone https://github.com/dutifuldev/claude-md-symlinker
-cd claude-md-symlinker
-cargo install --path .
+claude-md-symlinker install
 ```
 
-For a one-off local run:
+`install` does four things:
+
+- Adds managed Claude hooks to `~/.claude/settings.json`.
+- Starts a `systemd --user` repair service.
+- Creates local SQLite state.
+- Observes the current directory once.
+
+It does not scan your whole machine, home directory, or all repos.
+
+During install, it asks whether to automatically migrate safe existing
+`CLAUDE.md` files to `AGENTS.md` when Claude finds them while working. The
+default is yes. Auto-migration is still scoped only to directories Claude
+enters; it is not a global scan.
+
+For noninteractive installs:
 
 ```sh
-cargo run -- apply ~/repos --dry-run
+claude-md-symlinker install --auto-migrate
+claude-md-symlinker install --no-auto-migrate
 ```
 
-## Quick Start
+## How It Works
 
-Choose the directories claude-md-symlinker is allowed to scan:
+Claude hooks call:
 
 ```sh
-claude-md-symlinker init ~/repos ~/work
+claude-md-symlinker observe
 ```
 
-Preview what would happen:
+When Claude starts in or moves to a directory inside a Git repo,
+claude-md-symlinker checks that directory and each parent up to the repo root.
+For every `AGENTS.md` found on that path, it records the directory and creates
+or repairs the sibling `CLAUDE.md` shim.
 
-```sh
-claude-md-symlinker apply --dry-run
-```
-
-Apply the changes:
-
-```sh
-claude-md-symlinker apply
-```
-
-For each managed repository with `AGENTS.md`, the result is:
+Example:
 
 ```text
-AGENTS.md   # canonical file, usually committed
-CLAUDE.md   # local compatibility shim, ignored by Git
+cwd = /repo/apps/web/src/components
+
+checked:
+/repo/apps/web/src/components/AGENTS.md
+/repo/apps/web/src/AGENTS.md
+/repo/apps/web/AGENTS.md
+/repo/apps/AGENTS.md
+/repo/AGENTS.md
 ```
 
-Where file symlinks are available, the default shim is a relative symlink:
+It does not descend into siblings or scan the repo tree.
 
-```text
-CLAUDE.md -> AGENTS.md
-```
-
-Check a managed repo:
+The background service runs:
 
 ```sh
-git status --short -- CLAUDE.md
+claude-md-symlinker daemon
 ```
 
-No output means Git is not seeing the generated shim. If `CLAUDE.md` was an
-existing user file, it remains visible, usually as:
-
-```text
-?? CLAUDE.md
-```
+It repairs only instruction directories already recorded by hooks. If a
+managed `CLAUDE.md` is deleted, the service recreates it on a later repair
+tick.
 
 ## Commands
 
 ```sh
-claude-md-symlinker init <roots...>
+claude-md-symlinker status
 ```
 
-Creates or updates the configured scan roots. Roots must already exist.
+Shows hook, service, state, repo, and migration health.
 
 ```sh
-claude-md-symlinker apply [roots...]
+claude-md-symlinker repos list
+claude-md-symlinker repos remove <repo>
+claude-md-symlinker repos prune
 ```
 
-Runs reconciliation. If roots are supplied after config exists, they must stay
-inside the configured scan roots.
+Lists or trims the observed repo set. Removing a repo stops future service
+repairs for it but does not delete files.
 
 ```sh
-claude-md-symlinker watch [roots...]
+claude-md-symlinker migrate --dry-run
+claude-md-symlinker migrate
 ```
 
-Runs the same reconciliation on startup, on relevant file events, and
-periodically. Watching is only a trigger; `apply` is the source of truth.
+Migrates detected user-owned `CLAUDE.md` files into `AGENTS.md`. Migration works
+only from files Claude has already encountered on observed paths. It never scans
+whole repos and never commits.
 
 ```sh
-claude-md-symlinker service install
-claude-md-symlinker service start
-claude-md-symlinker service status
-claude-md-symlinker service stop
-claude-md-symlinker service uninstall
+claude-md-symlinker settings set auto-migrate false
+claude-md-symlinker settings set auto-migrate true
 ```
 
-Installs and manages a Linux `systemd --user` service that runs
-`claude-md-symlinker watch`. Service installation never uses root and never broadens
-your configured scan roots.
+Controls safe auto-migration.
 
 ```sh
-claude-md-symlinker doctor
+claude-md-symlinker purge --dry-run
+claude-md-symlinker purge
 ```
 
-Checks local setup, including Git availability, config, state storage, enabled
-adapters, and symlink support.
+Deletes managed shims recorded in state, after confirming each file is still a
+managed shim on disk.
 
 ```sh
-claude-md-symlinker clean [roots...] --remove-if-source-missing
+claude-md-symlinker uninstall
+claude-md-symlinker uninstall --purge
 ```
 
-Removes stale managed shims after the source file is gone. Unknown files are
-not removed.
+Removes managed Claude hooks and the user service. By default, uninstall leaves
+generated shims in place. `--purge` also removes managed shims.
 
 Global options:
 
 ```sh
---config <path>   Use an explicit config file
---dry-run         Validate and report without mutating repos or state
---json            Print machine-readable output
+--dry-run   Show planned changes without writing
+--json      Print machine-readable output
 ```
 
-## Configuration
+## Migration Rules
 
-claude-md-symlinker uses the platform config directory by default. You can override the
-config path with `--config <path>` or `CLAUDE_MD_SYMLINKER_CONFIG`.
+Migration is conservative.
 
-The local SQLite state directory can be overridden with `CLAUDE_MD_SYMLINKER_DATA_DIR`.
+Safe exact rewrites:
 
-Example config:
+```text
+# CLAUDE.md
+  -> # AGENTS.md
 
-```toml
-[scan]
-roots = ["~/repos", "~/work"]
-include_paths = []
-exclude_paths = ["~/repos/archive"]
-exclude_dir_names = ["node_modules", ".cache", ".venv", "target", "dist", "build"]
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+  -> This file provides guidance to AI agents when working with code in this repository.
 
-[git]
-exclude_mode = "per_repo"
-
-[watch]
-enabled = true
-reconcile_interval_minutes = 30
-full_rescan_interval_hours = 12
-
-[materialization]
-strategy = "auto"
-allow_hardlink = false
-
-[adapters.claude]
-enabled = true
-source = "AGENTS.md"
-target = "CLAUDE.md"
-on_source_missing = "leave"
+Claude Code (claude.ai/code)
+  -> AI agents
 ```
 
-Important fields:
+If unknown Claude-specific wording remains, the file is marked `needs_review`
+instead of being changed. If `AGENTS.md` already exists beside the candidate,
+migration skips it unless explicitly told to replace.
 
-- `scan.roots` is the hard allowlist for discovery and writes.
-- `scan.include_paths` narrows the allowlist when non-empty.
-- `scan.exclude_paths` always wins over roots and include paths.
-- `scan.exclude_dir_names` prunes noisy directories while walking.
-- `git.exclude_mode` should stay `per_repo`; global exclude mode is currently
-  rejected because it cannot be scoped to your configured roots.
-- `materialization.strategy` can be `auto`, `symlink`, `copy`, or `hardlink`.
-- `materialization.allow_hardlink` must be `true` before auto mode will try
-  hardlinks.
-- `adapters.claude.on_source_missing` can be `leave` or `remove_if_managed`.
-
-## Safety Model
-
-claude-md-symlinker is intentionally conservative:
-
-- It only scans directories you opt into.
-- It never scans the whole machine by default.
-- It never creates `AGENTS.md`.
-- It never overwrites an unknown `CLAUDE.md`.
-- It never changes a tracked `CLAUDE.md`.
-- It does not add `CLAUDE.md` to Git excludes when an existing user-owned file
-  is present.
-- It refuses source or target paths that escape the repository root.
-- It reports conflicts instead of guessing ownership.
-- `--dry-run` avoids filesystem and state mutations.
+When migration succeeds in a Git repo, `AGENTS.md` is added to the Git index.
+Generated `CLAUDE.md` shims are kept local and ignored. The tool never commits.
 
 ## Git Behavior
 
-Managed shims are excluded with the repository-local Git exclude file:
+Managed shims are ignored with the repo-local exclude file:
 
 ```text
 .git/info/exclude
 ```
 
-claude-md-symlinker writes a managed block like this:
+claude-md-symlinker writes a managed block like:
 
 ```text
 # claude-md-symlinker managed begin
 /CLAUDE.md
+/apps/web/CLAUDE.md
 # claude-md-symlinker managed end
 ```
 
 This file is private to your checkout and is not committed.
 
-If `CLAUDE.md` already exists and is not managed by claude-md-symlinker:
+If `CLAUDE.md` already exists and is not managed:
 
-- the file is left untouched
-- no ignore entry is added for it
-- Git continues to report it as untracked or tracked normally
-- `apply` reports a conflict and exits with code `2`
+- It is left untouched.
+- It is recorded as a migration candidate when appropriate.
+- No ignore entry is added for it during normal shim repair.
+- Git continues to show it normally.
 
-To let claude-md-symlinker manage that repository, move the useful content into
-`AGENTS.md`, then remove or rename the old `CLAUDE.md` and run:
+Tracked `CLAUDE.md` files are never changed during normal shim repair.
+Migration is the explicit path for converting them.
 
-```sh
-claude-md-symlinker apply
-```
+## Safety Model
 
-## Materialization
+claude-md-symlinker is intentionally boring:
 
-In `auto` mode, claude-md-symlinker tries:
+- No whole-machine scan.
+- No default home-directory scan.
+- No repo tree scan from hooks.
+- No overwriting unknown files.
+- No normal writes to tracked `CLAUDE.md`.
+- No generated shim commits.
+- No migration commits.
+- No cleanup based only on SQLite records.
+- Hooks exit successfully by default so Claude is not broken by this tool.
 
-1. Relative symlink
-2. Hardlink, only when `allow_hardlink = true`
-3. Managed copy with a header
-
-Managed copies start with:
-
-```html
-<!-- claude-md-symlinker managed: source=AGENTS.md; adapter=claude; do not edit this file directly. -->
-```
-
-Edit `AGENTS.md`, not generated shims.
-
-## Linux User Service
-
-On Linux, claude-md-symlinker can install a user-scoped systemd service for automatic
-repair. Install the binary first, initialize your scan roots, then install and
-start the service:
+The SQLite state directory can be overridden with:
 
 ```sh
-cargo install --git https://github.com/dutifuldev/claude-md-symlinker
-claude-md-symlinker init ~/repos ~/work
-claude-md-symlinker service install
-claude-md-symlinker service start
+CLAUDE_MD_SYMLINKER_DATA_DIR=/path/to/state
 ```
 
-The installer writes:
+## Local Development
 
-```text
-~/.config/systemd/user/claude-md-symlinker.service
-```
-
-The unit runs:
+From a checkout:
 
 ```sh
-claude-md-symlinker --config <your-config> watch
-```
-
-Service install requires absolute scan paths, including paths written with
-`~`. Running `claude-md-symlinker init` stores canonical absolute roots.
-
-Useful service commands:
-
-```sh
-claude-md-symlinker service status
-claude-md-symlinker service restart
-claude-md-symlinker service stop
-claude-md-symlinker service uninstall
-```
-
-`service install` refuses to run when no scan roots are configured. If you use
-an explicit config path, pass it during installation:
-
-```sh
-claude-md-symlinker --config ~/.config/claude-md-symlinker/work.toml service install
-```
-
-The generated unit includes a claude-md-symlinker marker. `service uninstall` removes
-only managed units and refuses to remove unknown user unit files.
-
-## Exit Codes
-
-```text
-0  success
-1  operational or configuration error
-2  conflicts were found
+cargo test
+cargo run -- install --dry-run
+cargo run -- observe --json
+cargo run -- status
 ```

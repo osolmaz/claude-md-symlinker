@@ -10,6 +10,7 @@ repository = "https://github.com/dutifuldev/claude-md-symlinker"
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 directories = "6.0"
+fs2 = "0.4"
 ignore = "0.4"
 notify = "6.1"
 pathdiff = "0.2"

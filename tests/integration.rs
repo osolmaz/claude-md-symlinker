@@ -10,7 +10,9 @@ use std::{
 
 use claude_md_symlinker::{
     cleaner::{self, CleanOptions},
+    cli::ObserveArgs,
     config::{AppConfig, MaterializationStrategy, SourceMissingBehavior},
+    daemon, migration, observe, purge,
     reconciler::{self, ReconcileOptions},
     state::State,
 };
@@ -4543,6 +4545,577 @@ fn cli_roots_require_configured_scope_when_config_exists() {
 
     assert!(error.to_string().contains("no scan roots are configured"));
     assert!(!repo.join("CLAUDE.md").exists());
+}
+
+#[test]
+fn observe_creates_shims_for_agents_on_cwd_parent_path_only() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let nested = repo.join("apps/web/src/components");
+    let sibling = repo.join("apps/api");
+    fs::create_dir_all(&nested).unwrap();
+    fs::create_dir_all(&sibling).unwrap();
+    fs::write(repo.join("AGENTS.md"), "root instructions\n").unwrap();
+    fs::write(repo.join("apps/web/AGENTS.md"), "web instructions\n").unwrap();
+    fs::write(sibling.join("AGENTS.md"), "api instructions\n").unwrap();
+
+    let state = fixture.state();
+    let report = observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(nested),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(report.instruction_dirs.len(), 2);
+    assert!(repo.join("CLAUDE.md").exists());
+    assert!(repo.join("apps/web/CLAUDE.md").exists());
+    assert!(!sibling.join("CLAUDE.md").exists());
+    assert!(git_check_ignore(&repo, "CLAUDE.md"));
+    assert!(git_check_ignore(&repo, "apps/web/CLAUDE.md"));
+    assert!(!git_check_ignore(&repo, "apps/api/CLAUDE.md"));
+}
+
+#[test]
+fn daemon_repairs_deleted_recorded_shim_without_touching_unobserved_dirs() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let unobserved = repo.join("unobserved");
+    fs::create_dir_all(&unobserved).unwrap();
+    fs::write(repo.join("AGENTS.md"), "root instructions\n").unwrap();
+    fs::write(unobserved.join("AGENTS.md"), "unobserved instructions\n").unwrap();
+    let state = fixture.state();
+
+    observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(repo.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+    fs::remove_file(repo.join("CLAUDE.md")).unwrap();
+
+    let report = daemon::repair_once(&state, false, 500).unwrap();
+
+    assert_eq!(report.repaired + report.created, 1);
+    assert!(repo.join("CLAUDE.md").exists());
+    assert!(!unobserved.join("CLAUDE.md").exists());
+}
+
+#[test]
+fn migrate_converts_detected_safe_claude_md_to_agents_md_and_local_shim() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(
+        repo.join("CLAUDE.md"),
+        "# CLAUDE.md\n\nThis file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.\n",
+    )
+    .unwrap();
+    let state = fixture.state();
+
+    observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(repo.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+
+    let dry_run = migration::migrate(
+        &state,
+        migration::MigrateOptions {
+            dry_run: true,
+            auto_safe_only: true,
+            replace_existing: false,
+            git_add: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(dry_run.safe.len(), 1);
+    assert!(
+        dry_run.safe[0]
+            .diff
+            .as_deref()
+            .unwrap()
+            .contains("# AGENTS.md")
+    );
+
+    let report = migration::migrate(
+        &state,
+        migration::MigrateOptions {
+            dry_run: false,
+            auto_safe_only: true,
+            replace_existing: false,
+            git_add: true,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(report.migrated.len(), 1);
+    let agents = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
+    assert!(agents.contains("# AGENTS.md"));
+    assert!(agents.contains("AI agents"));
+    assert_eq!(
+        fs::read_link(repo.join("CLAUDE.md")).unwrap(),
+        PathBuf::from("AGENTS.md")
+    );
+    assert_eq!(git_status(&repo, "AGENTS.md"), "A  AGENTS.md\n");
+    assert!(git_check_ignore(&repo, "CLAUDE.md"));
+}
+
+#[test]
+fn migrate_replace_existing_handles_tracked_claude_md() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(
+        repo.join("CLAUDE.md"),
+        "# CLAUDE.md\n\nThis file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.\n",
+    )
+    .unwrap();
+    fs::write(repo.join("AGENTS.md"), "# Old agents\n").unwrap();
+    git(&repo, &["add", "CLAUDE.md", "AGENTS.md"]);
+    git(&repo, &["commit", "-m", "initial"]);
+    let state = fixture.state();
+
+    observe::observe(
+        &ObserveArgs {
+            no_apply: true,
+            strict: true,
+            cwd: Some(repo.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+
+    let report = migration::migrate(
+        &state,
+        migration::MigrateOptions {
+            dry_run: false,
+            auto_safe_only: true,
+            replace_existing: true,
+            git_add: true,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(report.migrated.len(), 1);
+    let agents = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
+    assert!(agents.contains("# AGENTS.md"));
+    assert!(agents.contains("AI agents"));
+    assert_eq!(
+        fs::read_link(repo.join("CLAUDE.md")).unwrap(),
+        PathBuf::from("AGENTS.md")
+    );
+    assert!(git_check_ignore(&repo, "CLAUDE.md"));
+}
+
+#[test]
+fn observe_auto_migrates_only_when_setting_is_enabled() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(
+        repo.join("CLAUDE.md"),
+        "# CLAUDE.md\n\nThis file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.\n",
+    )
+    .unwrap();
+    let state = fixture.state();
+    state.set_setting("auto_migrate", "true").unwrap();
+
+    observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(repo.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+
+    assert!(repo.join("AGENTS.md").exists());
+    assert_eq!(
+        fs::read_link(repo.join("CLAUDE.md")).unwrap(),
+        PathBuf::from("AGENTS.md")
+    );
+}
+
+#[test]
+fn purge_removes_only_files_proven_to_be_managed() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "root instructions\n").unwrap();
+    let state = fixture.state();
+
+    observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(repo.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+    assert!(repo.join("CLAUDE.md").exists());
+
+    let report = purge::purge(&state, false).unwrap();
+
+    assert_eq!(report.removed.len(), 1);
+    assert!(!repo.join("CLAUDE.md").exists());
+    assert!(!git_check_ignore(&repo, "CLAUDE.md"));
+}
+
+#[test]
+fn purge_retry_keeps_failed_shims_in_scope() {
+    let fixture = Fixture::new();
+    let state = fixture.state();
+    let blocked = fixture.repo("blocked");
+    fs::write(blocked.join("AGENTS.md"), "blocked instructions\n").unwrap();
+    observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(blocked.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+    git(&blocked, &["add", "-f", "CLAUDE.md"]);
+
+    let removable = fixture.repo("removable");
+    fs::write(removable.join("AGENTS.md"), "removable instructions\n").unwrap();
+    observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(removable.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+
+    let first = purge::purge(&state, false).unwrap();
+    assert_eq!(first.removed.len(), 1);
+    assert_eq!(first.skipped.len(), 1);
+    assert!(!removable.join("CLAUDE.md").exists());
+    assert!(blocked.join("CLAUDE.md").exists());
+
+    git(&blocked, &["rm", "--cached", "-f", "CLAUDE.md"]);
+    let retry = purge::purge(&state, false).unwrap();
+    assert_eq!(retry.removed.len(), 1);
+    assert!(retry.skipped.is_empty());
+    assert!(!blocked.join("CLAUDE.md").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn targeted_reconcile_errors_are_recorded_in_state() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "root instructions\n").unwrap();
+    let state = fixture.state();
+    observe::observe(
+        &ObserveArgs {
+            no_apply: true,
+            strict: true,
+            cwd: Some(repo.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+    let exclude_path = git_exclude_path(&repo);
+    fs::remove_file(&exclude_path).unwrap();
+    std::os::unix::fs::symlink(fixture.root.path().join("outside-exclude"), &exclude_path).unwrap();
+
+    let report = daemon::repair_once(&state, false, 500).unwrap();
+
+    assert_eq!(report.errors, 1);
+    let counts = state.counts().unwrap();
+    assert_eq!(counts.recent_errors, 1);
+    let repos = state.observed_repos().unwrap();
+    assert_eq!(repos.len(), 1);
+    assert_eq!(repos[0].last_status.as_deref(), Some("error"));
+    assert!(repos[0].last_error.as_deref().unwrap().contains("exclude"));
+}
+
+#[test]
+fn state_cutover_archives_old_schema() {
+    let fixture = Fixture::new();
+    let db_path = fixture.data.path().join("state.sqlite3");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute_batch("CREATE TABLE repositories (id INTEGER PRIMARY KEY);")
+        .unwrap();
+    drop(conn);
+
+    let _state = State::open(fixture.data.path().to_path_buf()).unwrap();
+
+    assert!(
+        fixture
+            .data
+            .path()
+            .join("state.pre-observed-cutover.sqlite3")
+            .exists()
+    );
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
+}
+
+#[test]
+fn install_hooks_preserve_user_entries_and_uninstall_only_managed_entries() {
+    let fixture = Fixture::new();
+    let home = fixture.root.path().join("home");
+    let settings = home.join(".claude/settings.json");
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::write(
+        &settings,
+        r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo user hook"
+          }
+        ]
+      }
+    ]
+  }
+}
+"#,
+    )
+    .unwrap();
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
+
+    let output = Command::new(bin)
+        .arg("--json")
+        .arg("install")
+        .arg("--no-service")
+        .arg("--no-auto-migrate")
+        .arg("--bin")
+        .arg(bin)
+        .env("HOME", &home)
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
+        .current_dir(fixture.root.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new(bin)
+        .arg("--json")
+        .arg("install")
+        .arg("--no-service")
+        .arg("--no-auto-migrate")
+        .arg("--bin")
+        .arg(bin)
+        .env("HOME", &home)
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
+        .current_dir(fixture.root.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let text = fs::read_to_string(&settings).unwrap();
+    assert_eq!(text.matches("echo user hook").count(), 1);
+    assert!(text.contains("mkdir -p"));
+    assert_eq!(
+        text.matches("claude-md-symlinker managed hook v1").count(),
+        3
+    );
+    assert!(
+        settings.with_extension("json.backup").exists()
+            || fs::read_dir(settings.parent().unwrap())
+                .unwrap()
+                .any(|entry| {
+                    entry
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .contains("settings.json.backup")
+                })
+    );
+
+    let output = Command::new(bin)
+        .arg("--json")
+        .arg("uninstall")
+        .arg("--no-service")
+        .env("HOME", &home)
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = fs::read_to_string(&settings).unwrap();
+    assert_eq!(text.matches("echo user hook").count(), 1);
+    assert!(!text.contains("claude-md-symlinker managed hook v1"));
+}
+
+#[test]
+fn uninstall_json_with_purge_emits_one_document() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let home = fixture.root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    fs::write(repo.join("AGENTS.md"), "root instructions\n").unwrap();
+    let state = fixture.state();
+    observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(repo.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
+
+    let output = Command::new(bin)
+        .arg("--json")
+        .arg("uninstall")
+        .arg("--no-hooks")
+        .arg("--no-service")
+        .arg("--purge")
+        .env("HOME", &home)
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(value.get("uninstall").is_some());
+    assert_eq!(value["purge"]["removed"].as_array().unwrap().len(), 1);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("}\n{"));
+    assert!(!repo.join("CLAUDE.md").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn install_service_writes_daemon_unit_and_starts_it_with_fake_systemctl() {
+    let fixture = Fixture::new();
+    let home = fixture.root.path().join("home");
+    let xdg = home.join(".config");
+    let unit_dir = xdg.join("systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let log = fixture.root.path().join("systemctl.log");
+    let fake = fixture.root.path().join("fake-systemctl");
+    fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\nif [ \"$2\" = \"is-active\" ]; then echo active; exit 0; fi\nexit 0\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    make_executable(&fake);
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
+
+    let output = Command::new(bin)
+        .arg("--json")
+        .arg("install")
+        .arg("--no-hooks")
+        .arg("--no-auto-migrate")
+        .arg("--bin")
+        .arg(bin)
+        .arg("--unit-name")
+        .arg("claude-md-symlinker-new-test")
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("CLAUDE_MD_SYMLINKER_SYSTEMCTL", &fake)
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
+        .current_dir(fixture.root.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let unit = fs::read_to_string(unit_dir.join("claude-md-symlinker-new-test.service")).unwrap();
+    assert!(unit.contains("ExecStart="));
+    assert!(unit.contains(" daemon"));
+    assert!(!unit.contains(" watch"));
+    let log_text = fs::read_to_string(log).unwrap();
+    assert!(log_text.contains("--user"));
+    assert!(log_text.contains("restart"));
+}
+
+#[cfg(all(target_os = "linux", unix))]
+#[test]
+fn install_service_rejects_symlinked_unit_path() {
+    let fixture = Fixture::new();
+    let home = fixture.root.path().join("home");
+    let unit_dir = home.join(".config/systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let outside = fixture.root.path().join("outside.service");
+    fs::write(
+        &outside,
+        "# claude-md-symlinker managed systemd user unit\noutside\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        &outside,
+        unit_dir.join("claude-md-symlinker-symlink-test.service"),
+    )
+    .unwrap();
+    let fake = fixture.root.path().join("fake-systemctl");
+    fs::write(&fake, "#!/bin/sh\nexit 0\n").unwrap();
+    make_executable(&fake);
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
+
+    let output = Command::new(bin)
+        .arg("install")
+        .arg("--no-hooks")
+        .arg("--no-auto-migrate")
+        .arg("--bin")
+        .arg(bin)
+        .arg("--unit-name")
+        .arg("claude-md-symlinker-symlink-test")
+        .env("HOME", &home)
+        .env("CLAUDE_MD_SYMLINKER_SYSTEMD_USER_DIR", &unit_dir)
+        .env("CLAUDE_MD_SYMLINKER_SYSTEMCTL", &fake)
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("symlinked systemd unit"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(outside).unwrap(),
+        "# claude-md-symlinker managed systemd user unit\noutside\n"
+    );
 }
 
 fn git_init(repo: &Path) {

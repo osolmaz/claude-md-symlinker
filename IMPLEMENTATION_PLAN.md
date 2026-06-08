@@ -1,16 +1,15 @@
 # claude-md-symlinker Implementation Plan
 
-Status: the current implementation has a root-scoped reconciler, `apply`,
-`clean`, `watch`, and Linux `systemd --user` service support. The next product
-iteration is a clean cutover to zero-config, install-and-forget operation:
+Status: the zero-config, install-and-forget implementation is now the primary
+product surface. The legacy root-scoped `init`, `apply`, `clean`, `watch`, and
+low-level `service` commands remain available. The implemented model is:
 
 ```text
 Claude hook observes cwd paths -> tool records AGENTS.md directories -> service repairs recorded shims
 ```
 
-There is no backward-compatibility requirement for the root-config-first model.
 Old root-scoped behavior can be removed, hidden, or kept only as internal test
-support if it helps implementation.
+support in later cleanup.
 
 ## Goal
 
@@ -1205,10 +1204,10 @@ These are intentionally deferred:
 5. Dry-run output is grouped for humans; `--json` is the stable exact output.
 6. Root-config-first behavior is removed from the main product surface.
 
-## Remaining Decision
+## Resolved Decision
 
-Whether `uninstall` should prompt interactively before `--purge` when stdout is
-a TTY.
+`uninstall --purge` does not prompt. Use `--dry-run` to preview managed shims
+before deletion.
 
 The architecture should support these choices without changing the core
 observed-repo model.

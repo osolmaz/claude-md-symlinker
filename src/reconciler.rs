@@ -9,7 +9,7 @@ use crate::{
     git::GitRepo,
     materializer::{self, MaterializationKind, TargetState},
     reporting::{RepoResult, Report, Status},
-    state::{ShimRecord, State},
+    state::{ShimRecord, State, TargetedShimRecord},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -70,9 +70,68 @@ pub fn apply(
     Ok(report)
 }
 
+pub fn apply_instruction_dir(
+    repo: &GitRepo,
+    instruction_dir: &std::path::Path,
+    state: &State,
+    options: ReconcileOptions,
+) -> Result<Report> {
+    let config = AppConfig::default();
+    let adapter = adapter_for_instruction_dir(repo, instruction_dir)?;
+    let mut report = Report::new(1);
+    let (result, exclude_updated) = reconcile_adapter_in_dir(
+        &config,
+        repo,
+        instruction_dir,
+        &adapter,
+        state,
+        options,
+        false,
+    )
+    .unwrap_or_else(|error| {
+        let message = error.to_string();
+        if !options.dry_run {
+            let _ = state.mark_instruction_result(instruction_dir, Some("error"), Some(&message));
+            let _ = state.record_event(
+                "error",
+                Some(&repo.root),
+                Some(&adapter.name),
+                "error",
+                &message,
+            );
+        }
+        (result_for(repo, &adapter, Status::Error, message), false)
+    });
+    if exclude_updated {
+        report.summary.exclude_updates += 1;
+    }
+    report.push(result);
+    Ok(report)
+}
+
 fn reconcile_adapter(
     config: &AppConfig,
     repo: &GitRepo,
+    adapter: &Adapter,
+    state: &State,
+    options: ReconcileOptions,
+    shared_exclude: bool,
+) -> Result<(RepoResult, bool)> {
+    reconcile_adapter_in_dir(
+        config,
+        repo,
+        &repo.root,
+        adapter,
+        state,
+        options,
+        shared_exclude,
+    )
+}
+
+fn reconcile_adapter_in_dir(
+    config: &AppConfig,
+    repo: &GitRepo,
+    instruction_dir: &std::path::Path,
     adapter: &Adapter,
     state: &State,
     options: ReconcileOptions,
@@ -111,6 +170,7 @@ fn reconcile_adapter(
                 record(
                     state,
                     repo,
+                    instruction_dir,
                     adapter,
                     None,
                     Status::TrackedConflict,
@@ -177,6 +237,7 @@ fn reconcile_adapter(
                 record(
                     state,
                     repo,
+                    instruction_dir,
                     adapter,
                     materialization,
                     result.status,
@@ -227,6 +288,7 @@ fn reconcile_adapter(
             record(
                 state,
                 repo,
+                instruction_dir,
                 adapter,
                 managed_kind,
                 Status::NoSource,
@@ -257,6 +319,7 @@ fn reconcile_adapter(
             record(
                 state,
                 repo,
+                instruction_dir,
                 adapter,
                 None,
                 Status::TrackedConflict,
@@ -270,15 +333,15 @@ fn reconcile_adapter(
     if matches!(target_state, TargetState::ManagedHardlink)
         && stored_managed_kind(repo, adapter, state)? != Some(MaterializationKind::Hardlink)
     {
-        return unmanaged_conflict(config, repo, adapter, state, options);
+        return unmanaged_conflict(config, repo, instruction_dir, adapter, state, options);
     }
 
     match target_state {
         TargetState::UnknownRegularFile => {
-            unmanaged_conflict(config, repo, adapter, state, options)
+            unmanaged_conflict(config, repo, instruction_dir, adapter, state, options)
         }
         TargetState::UnknownSymlink | TargetState::Other => {
-            unmanaged_conflict(config, repo, adapter, state, options)
+            unmanaged_conflict(config, repo, instruction_dir, adapter, state, options)
         }
         target_state => {
             let previous_state = target_state.clone();
@@ -316,6 +379,7 @@ fn reconcile_adapter(
                 record(
                     state,
                     repo,
+                    instruction_dir,
                     adapter,
                     Some(outcome.kind),
                     result.status,
@@ -338,6 +402,7 @@ fn target_is_missing(repo: &GitRepo, adapter: &Adapter) -> bool {
 fn unmanaged_conflict(
     config: &AppConfig,
     repo: &GitRepo,
+    instruction_dir: &std::path::Path,
     adapter: &Adapter,
     state: &State,
     options: ReconcileOptions,
@@ -357,6 +422,7 @@ fn unmanaged_conflict(
         record(
             state,
             repo,
+            instruction_dir,
             adapter,
             None,
             Status::Conflict,
@@ -436,6 +502,7 @@ fn message_for(status: Status, kind: MaterializationKind, dry_run: bool) -> Stri
 fn record(
     state: &State,
     repo: &GitRepo,
+    instruction_dir: &std::path::Path,
     adapter: &Adapter,
     materialization: Option<MaterializationKind>,
     status: Status,
@@ -443,8 +510,22 @@ fn record(
 ) -> Result<()> {
     let content_hash = materializer::source_hash(repo, adapter)?;
 
-    state.record(ShimRecord {
+    if instruction_dir == repo.root {
+        return state.record(ShimRecord {
+            repo,
+            adapter_name: &adapter.name,
+            source_rel_path: &adapter.source.to_string_lossy(),
+            target_rel_path: &adapter.target.to_string_lossy(),
+            materialization,
+            content_hash,
+            status,
+            message,
+        });
+    }
+
+    state.record_targeted(TargetedShimRecord {
         repo,
+        instruction_dir,
         adapter_name: &adapter.name,
         source_rel_path: &adapter.source.to_string_lossy(),
         target_rel_path: &adapter.target.to_string_lossy(),
@@ -453,6 +534,31 @@ fn record(
         status,
         message,
     })
+}
+
+fn adapter_for_instruction_dir(
+    repo: &GitRepo,
+    instruction_dir: &std::path::Path,
+) -> Result<Adapter> {
+    let rel_dir = instruction_dir.strip_prefix(&repo.root).with_context(|| {
+        format!(
+            "instruction directory {} is outside repository root {}",
+            instruction_dir.display(),
+            repo.root.display()
+        )
+    })?;
+    let source = rel_dir.join("AGENTS.md");
+    let target = rel_dir.join("CLAUDE.md");
+    Adapter::from_config(
+        "claude",
+        &crate::config::AdapterConfig {
+            enabled: true,
+            source,
+            target,
+            on_source_missing: SourceMissingBehavior::Leave,
+        },
+    )?
+    .context("claude adapter unexpectedly disabled")
 }
 
 fn result_for(
