@@ -6,7 +6,8 @@ architecture notes, and workflow rules.
 
 [`AGENTS.md`](https://agents.md/) is "a simple, open format for guiding coding
 agents." It gives agents a predictable place to find the context and
-instructions they need for a repo.
+instructions they need for a repo. It is the brand-neutral, more widely
+accepted standard, as opposed to `CLAUDE.md`.
 
 Anthropic's workaround for `AGENTS.md` repos is to add a `CLAUDE.md` that
 imports `@AGENTS.md`, or to create a symlink. That works, but it still leaves
