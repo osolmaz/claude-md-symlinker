@@ -17,7 +17,7 @@ How about no?
 
 claude-md-symlinker is a service and Claude Code hook that automatically creates
 CLAUDE.md symlinks to AGENTS.md that are not tracked in git, 
-so that you don't have to commit them manually, and everything just works without
+so that you don't have to commit them manually. Everything just works without
 heavy scanning of your filesystem for AGENTS.md files.
 
 As Claude Code traverses your filesystem, any discovered AGENTS.md files will be
