@@ -58,6 +58,13 @@ claude-md-symlinker install --auto-migrate
 claude-md-symlinker install --no-auto-migrate
 ```
 
+For partial installs:
+
+```sh
+claude-md-symlinker install --no-service
+claude-md-symlinker install --no-hooks
+```
+
 ## How It Works
 
 Claude hooks call:
@@ -107,24 +114,32 @@ Shows hook, service, state, repo, and migration health.
 ```sh
 claude-md-symlinker repos list
 claude-md-symlinker repos remove <repo>
+claude-md-symlinker repos remove <repo> --clean-exclude
 claude-md-symlinker repos prune
 ```
 
 Lists or trims the observed repo set. Removing a repo stops future service
-repairs for it but does not delete files.
+repairs for it but does not delete files. `--clean-exclude` also removes
+managed Git exclude entries for that repo.
 
 ```sh
 claude-md-symlinker migrate --dry-run
 claude-md-symlinker migrate
+claude-md-symlinker migrate --replace-existing
+claude-md-symlinker migrate --no-git-add
 ```
 
 Migrates detected user-owned `CLAUDE.md` files into `AGENTS.md`. Migration works
 only from files Claude has already encountered on observed paths. It never scans
-whole repos and never commits.
+whole repos and never commits. By default, successful migrations add
+`AGENTS.md` to the Git index. `--no-git-add` leaves the index alone.
+`--replace-existing` allows replacing a sibling `AGENTS.md`, still only after
+the normal safe checks pass.
 
 ```sh
 claude-md-symlinker settings set auto-migrate false
 claude-md-symlinker settings set auto-migrate true
+claude-md-symlinker settings get auto-migrate
 ```
 
 Controls safe auto-migration.
@@ -171,10 +186,11 @@ Claude Code (claude.ai/code)
 
 If unknown Claude-specific wording remains, the file is marked `needs_review`
 instead of being changed. If `AGENTS.md` already exists beside the candidate,
-migration skips it unless explicitly told to replace.
+migration skips it unless `--replace-existing` is passed.
 
-When migration succeeds in a Git repo, `AGENTS.md` is added to the Git index.
-Generated `CLAUDE.md` shims are kept local and ignored. The tool never commits.
+When migration succeeds in a Git repo, `AGENTS.md` is added to the Git index by
+default. Generated `CLAUDE.md` shims are kept local and ignored. The tool never
+commits.
 
 ## Git Behavior
 
@@ -223,15 +239,4 @@ The SQLite state directory can be overridden with:
 
 ```sh
 CLAUDE_MD_SYMLINKER_DATA_DIR=/path/to/state
-```
-
-## Local Development
-
-From a checkout:
-
-```sh
-cargo test
-cargo run -- install --dry-run
-cargo run -- observe --json
-cargo run -- status
 ```
