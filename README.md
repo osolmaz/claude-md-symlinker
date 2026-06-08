@@ -1,15 +1,21 @@
 # claude-md-symlinker
 
-Anthropic's Claude Code docs say project instructions live in `CLAUDE.md`.
-For repos that already use `AGENTS.md`, their workaround is to add a
-`CLAUDE.md` that imports `@AGENTS.md`, or to create a symlink.
+`CLAUDE.md` is Claude Code's project instruction file. It is where Claude Code
+expects to find repo-specific context like build commands, coding conventions,
+architecture notes, and workflow rules.
 
-That works, but it still leaves every repo carrying a Claude-branded
-compatibility file. How about no?
+`AGENTS.md` is the tool-neutral version of that idea: one repo instruction file
+for coding agents in general, not one branded file per vendor.
 
-claude-md-symlinker lets you commit the tool-neutral `AGENTS.md` instead. It
-creates local `CLAUDE.md` shims for Claude Code, keeps those shims out of Git,
-and repairs them automatically when they disappear.
+Anthropic's workaround for `AGENTS.md` repos is to add a `CLAUDE.md` that
+imports `@AGENTS.md`, or to create a symlink. That works, but it still leaves
+every repo carrying a Claude-branded compatibility file.
+
+How about no?
+
+claude-md-symlinker lets you commit `AGENTS.md` as the real file. It creates
+local `CLAUDE.md` shims for Claude Code, keeps those shims out of Git, and
+repairs them automatically when they disappear.
 
 The normal result is:
 
