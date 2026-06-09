@@ -28,6 +28,7 @@ pub struct ObserveReport {
     pub created: usize,
     pub repaired: usize,
     pub refreshed: usize,
+    pub cleaned: usize,
     pub kept: usize,
     pub conflicts: usize,
     pub tracked_conflicts: usize,
@@ -86,6 +87,7 @@ pub fn observe(args: &ObserveArgs, state: &State, dry_run: bool) -> Result<Obser
         let source_rel = rel_path(&repo, &agents_path)?;
         let target_rel = rel_path(&repo, &claude_path)?;
 
+        let mut claude_classification = None;
         if fs::symlink_metadata(&claude_path).is_ok() {
             let classification = classify_claude_file(&repo, &dir)?;
             let hash = if matches!(classification.as_str(), "user_file" | "tracked_user_file") {
@@ -107,11 +109,14 @@ pub fn observe(args: &ObserveArgs, state: &State, dry_run: bool) -> Result<Obser
             }
             report.detected_claude_files.push(DetectedFileReport {
                 path: claude_path.clone(),
-                classification,
+                classification: classification.clone(),
             });
+            claude_classification = Some(classification);
         }
 
-        if !agents_path.is_file() {
+        let has_agents = agents_path.is_file();
+        let has_managed_claude = claude_classification.as_deref() == Some("managed_shim");
+        if !has_agents && !has_managed_claude {
             continue;
         }
 
@@ -137,6 +142,7 @@ pub fn observe(args: &ObserveArgs, state: &State, dry_run: bool) -> Result<Obser
             report.created += reconcile.summary.created;
             report.repaired += reconcile.summary.repaired;
             report.refreshed += reconcile.summary.refreshed;
+            report.cleaned += reconcile.summary.cleaned;
             report.kept += reconcile.summary.kept;
             report.conflicts += reconcile.summary.conflicts;
             report.tracked_conflicts += reconcile.summary.tracked_conflicts;
@@ -295,7 +301,7 @@ fn claude_adapter(repo: &GitRepo, instruction_dir: &Path) -> Result<Adapter> {
             enabled: true,
             source: rel_dir.join("AGENTS.md"),
             target: rel_dir.join("CLAUDE.md"),
-            on_source_missing: SourceMissingBehavior::Leave,
+            on_source_missing: SourceMissingBehavior::RemoveIfManaged,
         },
     )?
     .context("claude adapter unexpectedly disabled")

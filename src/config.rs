@@ -91,8 +91,8 @@ pub struct AdapterConfig {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceMissingBehavior {
-    #[default]
     Leave,
+    #[default]
     RemoveIfManaged,
 }
 
@@ -248,7 +248,7 @@ impl Default for AdapterConfig {
             enabled: true,
             source: PathBuf::from("AGENTS.md"),
             target: PathBuf::from("CLAUDE.md"),
-            on_source_missing: SourceMissingBehavior::Leave,
+            on_source_missing: SourceMissingBehavior::RemoveIfManaged,
         }
     }
 }

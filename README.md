@@ -121,7 +121,9 @@ claude-md-symlinker daemon
 
 It repairs only instruction directories already recorded by hooks. If a
 managed `CLAUDE.md` is deleted, the service recreates it on a later repair
-tick.
+tick. If the sibling `AGENTS.md` is deleted, the service removes only an
+untracked managed `CLAUDE.md` symlink and its Git exclude entry. Managed
+copies, hardlinks, tracked files, and unknown files are left in place.
 
 ## Commands
 
@@ -250,6 +252,8 @@ claude-md-symlinker is intentionally boring:
 - No repo tree scan from hooks.
 - No overwriting unknown files.
 - No normal writes to tracked `CLAUDE.md`.
+- No cleanup of tracked `CLAUDE.md`.
+- No source-missing cleanup of managed copies or hardlinks.
 - No generated shim commits.
 - No migration commits.
 - No cleanup based only on SQLite records.

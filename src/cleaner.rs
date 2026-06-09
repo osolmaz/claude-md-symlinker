@@ -88,8 +88,9 @@ fn clean_adapter(
     } else {
         None
     };
-    let stale_missing_managed_target = stored_missing_kind.is_some() && !shared_exclude;
-    let target_can_be_removed = target_managed_kind(&target_state).is_some();
+    let stale_missing_managed_target =
+        stored_missing_kind == Some(MaterializationKind::Symlink) && !shared_exclude;
+    let target_can_be_removed = target_is_managed_symlink(&target_state);
     let managed_kind = target_managed_kind(&target_state).or(stored_missing_kind);
     let managed = managed_kind.is_some();
 
@@ -135,12 +136,18 @@ fn clean_adapter(
         return Ok((result, false));
     }
 
-    if !options.remove_if_source_missing {
+    if !options.remove_if_source_missing
+        || (!target_can_be_removed && !stale_missing_managed_target)
+    {
         let result = result_for(
             repo,
             adapter,
             Status::NoSource,
-            "managed shim is stale; pass --remove-if-source-missing to remove it",
+            if options.remove_if_source_missing {
+                "managed shim is stale but is not a symlink; leaving it untouched"
+            } else {
+                "managed shim is stale; pass --remove-if-source-missing to remove it"
+            },
         );
         if !options.dry_run {
             record(
@@ -258,6 +265,10 @@ fn target_managed_kind(target_state: &TargetState) -> Option<MaterializationKind
         TargetState::ManagedHardlink => Some(MaterializationKind::Hardlink),
         _ => None,
     }
+}
+
+fn target_is_managed_symlink(target_state: &TargetState) -> bool {
+    matches!(target_state, TargetState::ManagedSymlink { .. })
 }
 
 fn stored_managed_kind(

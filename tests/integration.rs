@@ -1105,7 +1105,7 @@ fn copy_materialization_preserves_source_permissions() {
 }
 
 #[test]
-fn clean_removes_readonly_managed_copy() {
+fn clean_keeps_managed_copy_when_source_is_missing() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
     let source = repo.join("AGENTS.md");
@@ -1151,8 +1151,9 @@ fn clean_removes_readonly_managed_copy() {
     )
     .unwrap();
 
-    assert_eq!(report.summary.cleaned, 1);
-    assert!(!repo.join("CLAUDE.md").exists());
+    assert_eq!(report.summary.no_source, 1);
+    assert_eq!(report.summary.cleaned, 0);
+    assert!(repo.join("CLAUDE.md").exists());
 }
 
 #[cfg(unix)]
@@ -1734,12 +1735,11 @@ fn clean_removes_only_stale_managed_shims_when_requested() {
 }
 
 #[test]
-fn apply_remove_if_managed_removes_stale_shim_and_exclude() {
+fn apply_removes_stale_managed_symlink_by_default() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
     fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
-    let mut config = fixture.config();
-    config.adapters.claude.on_source_missing = SourceMissingBehavior::RemoveIfManaged;
+    let config = fixture.config();
     let state = fixture.state();
 
     reconciler::apply(
@@ -1804,6 +1804,44 @@ fn remove_if_managed_cleans_nested_relative_symlink_after_source_deletion() {
     assert_eq!(report.summary.cleaned, 1);
     assert_eq!(report.summary.exclude_updates, 1);
     assert!(fs::symlink_metadata(repo.join(".claude/CLAUDE.md")).is_err());
+}
+
+#[test]
+fn apply_remove_if_managed_keeps_managed_copy_after_source_deletion() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
+    let mut config = fixture.config();
+    config.materialization.strategy = MaterializationStrategy::Copy;
+    let state = fixture.state();
+
+    reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+    fs::remove_file(repo.join("AGENTS.md")).unwrap();
+
+    let report = reconciler::apply(
+        &config,
+        false,
+        &[],
+        &state,
+        ReconcileOptions { dry_run: false },
+    )
+    .unwrap();
+
+    assert_eq!(report.summary.no_source, 1);
+    assert_eq!(report.summary.cleaned, 0);
+    assert!(repo.join("CLAUDE.md").exists());
+    assert!(
+        fs::read_to_string(repo.join("CLAUDE.md"))
+            .unwrap()
+            .contains("canonical instructions")
+    );
 }
 
 #[test]
@@ -1949,7 +1987,7 @@ fn source_missing_after_deleted_managed_target_removes_stale_exclude() {
     )
     .unwrap();
 
-    assert_eq!(report.summary.no_source, 1);
+    assert_eq!(report.summary.cleaned, 1);
     assert_eq!(report.summary.exclude_updates, 1);
 
     fs::write(repo.join("CLAUDE.md"), "new user claude\n").unwrap();
@@ -1957,11 +1995,12 @@ fn source_missing_after_deleted_managed_target_removes_stale_exclude() {
 }
 
 #[test]
-fn source_missing_keeps_existing_managed_target_ignored() {
+fn source_missing_leave_keeps_existing_managed_target_ignored() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
     fs::write(repo.join("AGENTS.md"), "canonical instructions\n").unwrap();
-    let config = fixture.config();
+    let mut config = fixture.config();
+    config.adapters.claude.on_source_missing = SourceMissingBehavior::Leave;
     let state = fixture.state();
 
     reconciler::apply(
@@ -4578,6 +4617,45 @@ fn observe_creates_shims_for_agents_on_cwd_parent_path_only() {
     assert!(git_check_ignore(&repo, "CLAUDE.md"));
     assert!(git_check_ignore(&repo, "apps/web/CLAUDE.md"));
     assert!(!git_check_ignore(&repo, "apps/api/CLAUDE.md"));
+}
+
+#[test]
+fn observe_removes_stale_managed_symlink_after_source_deletion() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let nested = repo.join("internal");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(nested.join("AGENTS.md"), "internal instructions\n").unwrap();
+    let state = fixture.state();
+
+    observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(nested.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+    assert!(nested.join("CLAUDE.md").exists());
+    assert!(git_check_ignore(&repo, "internal/CLAUDE.md"));
+
+    fs::remove_file(nested.join("AGENTS.md")).unwrap();
+    let report = observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(nested.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(report.cleaned, 1);
+    assert!(!nested.join("CLAUDE.md").exists());
+    assert!(!git_check_ignore(&repo, "internal/CLAUDE.md"));
 }
 
 #[test]

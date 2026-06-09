@@ -147,8 +147,9 @@ fn reconcile_adapter_in_dir(
         } else {
             None
         };
-        let stale_missing_managed_target = stored_missing_kind.is_some() && !shared_exclude;
-        let target_can_be_removed = target_managed_kind(&target_state).is_some();
+        let stale_missing_managed_target =
+            stored_missing_kind == Some(MaterializationKind::Symlink) && !shared_exclude;
+        let target_can_be_removed = target_is_managed_symlink(&target_state);
         let managed_kind = target_managed_kind(&target_state).or(stored_missing_kind);
 
         if git::is_tracked(repo, &adapter.target)
@@ -460,6 +461,10 @@ fn target_managed_kind(target_state: &TargetState) -> Option<MaterializationKind
     })
 }
 
+fn target_is_managed_symlink(target_state: &TargetState) -> bool {
+    matches!(target_state, TargetState::ManagedSymlink { .. })
+}
+
 fn status_for(
     previous_state: TargetState,
     outcome_kind: MaterializationKind,
@@ -555,7 +560,7 @@ fn adapter_for_instruction_dir(
             enabled: true,
             source,
             target,
-            on_source_missing: SourceMissingBehavior::Leave,
+            on_source_missing: SourceMissingBehavior::RemoveIfManaged,
         },
     )?
     .context("claude adapter unexpectedly disabled")
