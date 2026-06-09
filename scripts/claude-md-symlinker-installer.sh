@@ -135,7 +135,7 @@ append_path_profile() {
     profile="$1"
     bin_dir="$2"
     [ "${CLAUDE_MD_SYMLINKER_NO_MODIFY_PATH:-0}" = "1" ] && return 0
-    [ -e "$profile" ] || : > "$profile" 2>/dev/null || return 0
+    [ -e "$profile" ] || ( : > "$profile" ) 2>/dev/null || return 0
     grep -F "$bin_dir" "$profile" >/dev/null 2>&1 && return 0
     {
         printf '\n# %s\n' "$APP_NAME"
