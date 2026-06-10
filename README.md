@@ -32,6 +32,11 @@ AGENTS.md                # canonical file, committed to Git
 CLAUDE.md -> AGENTS.md   # local generated shim, ignored by Git
 ```
 
+Note: the initial version of this work was the
+[`CLAUDE.md` to `AGENTS.md` migration guide](https://solmaz.io/log/2025/09/08/claude-md-agents-md-migration-guide/),
+which documented a manual migration and symlink setup. This repo is the
+follow-up that turns that workflow into an installable hook and service.
+
 ## Install
 
 Requirements:
