@@ -2,7 +2,7 @@
 set -eu
 
 APP_NAME="claude-md-symlinker"
-REPO="dutifuldev/claude-md-symlinker"
+REPO="osolmaz/claude-md-symlinker"
 APP_VERSION="${CLAUDE_MD_SYMLINKER_VERSION:-__CLAUDE_MD_SYMLINKER_VERSION__}"
 
 say() {

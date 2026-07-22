@@ -49,7 +49,7 @@ Requirements:
 Install:
 
 ```sh
-curl -fsSL https://github.com/dutifuldev/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh | sh
+curl -fsSL https://github.com/osolmaz/claude-md-symlinker/releases/latest/download/claude-md-symlinker-installer.sh | sh
 ```
 
 This does not require Rust, Cargo, or compiling anything locally. It installs

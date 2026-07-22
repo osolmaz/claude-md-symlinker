@@ -448,7 +448,7 @@ fn service_unit(bin: &Path) -> Result<String> {
         r#"{UNIT_MARKER}
 [Unit]
 Description=claude-md-symlinker AGENTS.md compatibility repair daemon
-Documentation=https://github.com/dutifuldev/claude-md-symlinker
+Documentation=https://github.com/osolmaz/claude-md-symlinker
 
 [Service]
 Type=exec

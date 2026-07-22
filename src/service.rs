@@ -322,7 +322,7 @@ fn build_unit(spec: &UnitSpec) -> String {
         r#"{MANAGED_MARKER}
 [Unit]
 Description=claude-md-symlinker AGENTS.md compatibility watcher
-Documentation=https://github.com/dutifuldev/claude-md-symlinker
+Documentation=https://github.com/osolmaz/claude-md-symlinker
 
 [Service]
 Type=exec
