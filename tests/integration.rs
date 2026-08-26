@@ -4752,6 +4752,58 @@ fn observe_reconciles_project_ancestor_and_global_skills() {
 
 #[cfg(unix)]
 #[test]
+fn source_missing_preserves_a_tracked_skill_link() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let source = create_agent_skill(&repo, "deploy");
+    let state = fixture.state();
+    observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(repo.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+    let target = repo.join(".claude/skills/deploy");
+    git(&repo, &["add", "-f", ".claude/skills/deploy"]);
+    fs::remove_dir_all(source).unwrap();
+
+    let report = observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(repo.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(report.tracked_conflicts, 1);
+    assert_eq!(report.cleaned, 0);
+    assert_eq!(
+        fs::read_link(&target).unwrap(),
+        PathBuf::from("../../.agents/skills/deploy")
+    );
+    assert_eq!(
+        git_status(&repo, ".claude/skills/deploy"),
+        "A  .claude/skills/deploy\n"
+    );
+    assert!(
+        !fs::read_to_string(git_exclude_path(&repo))
+            .unwrap()
+            .contains("/.claude/skills/deploy")
+    );
+    let counts = state.counts().unwrap();
+    assert_eq!(counts.managed_skills, 0);
+    assert_eq!(counts.skill_conflicts, 1);
+}
+
+#[cfg(unix)]
+#[test]
 fn purge_removes_only_filesystem_proven_skill_links() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
