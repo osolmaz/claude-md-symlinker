@@ -9,6 +9,7 @@ use crate::{
     git::{self, GitRepo},
     materializer::{self, MaterializationKind, TargetState},
     reporting::{RepoResult, Report, Status},
+    skills,
     state::{ShimRecord, State},
 };
 
@@ -60,6 +61,7 @@ pub fn clean(
         }
     }
 
+    report.extend(skills::clean_stale(state, options.dry_run)?);
     Ok(report)
 }
 

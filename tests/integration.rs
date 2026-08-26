@@ -2587,6 +2587,7 @@ fn doctor_dry_run_does_not_create_state() {
 
     let doctor = Command::new(bin)
         .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
+        .env("HOME", fixture.root.path())
         .args([
             "--dry-run",
             "--config",
@@ -2885,8 +2886,11 @@ fn watch_disabled_exits_before_reconciling() {
     )
     .unwrap();
     let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
+    let home = fixture.root.path().join("home");
+    fs::create_dir(&home).unwrap();
 
     let watch = Command::new(bin)
+        .env("HOME", &home)
         .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
         .args(["--config", config_path.to_str().unwrap(), "watch"])
         .output()
@@ -2908,8 +2912,11 @@ fn watch_reloads_config_and_updates_watched_roots() {
     let config_path = fixture.root.path().join("watch-config.toml");
     write_config_roots(&config_path, &[&first_repo]);
     let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
+    let home = fixture.root.path().join("home");
+    fs::create_dir(&home).unwrap();
 
     let mut child = Command::new(bin)
+        .env("HOME", &home)
         .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
         .current_dir(fixture.root.path())
         .args(["--config", "watch-config.toml", "watch"])
@@ -2942,6 +2949,63 @@ fn watch_reloads_config_and_updates_watched_roots() {
     let _ = child.wait();
 }
 
+#[cfg(unix)]
+#[test]
+fn watch_repairs_an_observed_nested_skill_link() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let nested = repo.join("apps/web");
+    let source = create_agent_skill(&nested, "deploy");
+    let state = fixture.state();
+    observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(nested.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+    drop(state);
+    let target = nested.join(".claude/skills/deploy");
+    fs::remove_file(&target).unwrap();
+    let config_path = fixture.root.path().join("watch-skills.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let home = fixture.root.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
+
+    let mut child = Command::new(bin)
+        .env("HOME", &home)
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
+        .current_dir(fixture.root.path())
+        .args(["--config", "watch-skills.toml", "watch"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("watch starts");
+
+    assert!(
+        wait_until(Duration::from_secs(5), || target.exists()),
+        "watch did not repair the observed skill link"
+    );
+    fs::remove_file(&target).unwrap();
+    fs::write(
+        source.join("SKILL.md"),
+        "---\nname: deploy\ndescription: Updated integration skill\n---\n",
+    )
+    .unwrap();
+    assert!(
+        wait_until(Duration::from_secs(5), || fs::symlink_metadata(&target)
+            .is_ok()),
+        "skill event did not trigger watch reconciliation"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 #[test]
 fn watch_honors_json_output_flag() {
     let fixture = Fixture::new();
@@ -2950,8 +3014,11 @@ fn watch_honors_json_output_flag() {
     let config_path = fixture.root.path().join("watch-json.toml");
     write_config_roots(&config_path, &[&repo]);
     let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
+    let home = fixture.root.path().join("home");
+    fs::create_dir(&home).unwrap();
 
     let mut child = Command::new(bin)
+        .env("HOME", &home)
         .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
         .args([
             "--dry-run",
@@ -4619,6 +4686,175 @@ fn observe_creates_shims_for_agents_on_cwd_parent_path_only() {
     assert!(!git_check_ignore(&repo, "apps/api/CLAUDE.md"));
 }
 
+#[cfg(unix)]
+#[test]
+fn observe_reconciles_project_ancestor_and_global_skills() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    let nested = repo.join("apps/web/src");
+    fs::create_dir_all(&nested).unwrap();
+    let project_source = create_agent_skill(&repo, "deploy");
+    fs::create_dir_all(project_source.join("scripts")).unwrap();
+    fs::write(project_source.join("scripts/run.sh"), "first\n").unwrap();
+    let home = tempfile::tempdir().unwrap();
+    create_agent_skill(home.path(), "review");
+    let state = fixture.state();
+
+    let report = observe::observe_with_global(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(nested),
+        },
+        &state,
+        false,
+        home.path(),
+    )
+    .unwrap();
+
+    let project_target = repo.join(".claude/skills/deploy");
+    let global_target = home.path().join(".claude/skills/review");
+    assert_eq!(report.created, 2);
+    assert_eq!(
+        fs::read_link(&project_target).unwrap(),
+        PathBuf::from("../../.agents/skills/deploy")
+    );
+    assert_eq!(
+        fs::read_link(&global_target).unwrap(),
+        PathBuf::from("../../.agents/skills/review")
+    );
+    assert_eq!(
+        fs::read_to_string(project_target.join("scripts/run.sh")).unwrap(),
+        "first\n"
+    );
+    fs::write(project_source.join("scripts/run.sh"), "second\n").unwrap();
+    assert_eq!(
+        fs::read_to_string(project_target.join("scripts/run.sh")).unwrap(),
+        "second\n"
+    );
+    assert!(git_check_ignore(&repo, ".claude/skills/deploy"));
+    assert!(
+        !fs::read_to_string(git_exclude_path(&repo))
+            .unwrap()
+            .lines()
+            .any(|line| line == "/.claude/skills")
+    );
+
+    fs::remove_file(&project_target).unwrap();
+    let repaired = daemon::repair_once(&state, false, 500).unwrap();
+    assert_eq!(repaired.repaired, 1);
+    assert_eq!(repaired.skill_roots_checked, 2);
+    assert_eq!(
+        fs::read_link(project_target).unwrap(),
+        PathBuf::from("../../.agents/skills/deploy")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn purge_removes_only_filesystem_proven_skill_links() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    create_agent_skill(&repo, "deploy");
+    create_agent_skill(&repo, "missing");
+    create_agent_skill(&repo, "review");
+    let state = fixture.state();
+    observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(repo.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+
+    let changed = repo.join(".claude/skills/review");
+    fs::remove_file(&changed).unwrap();
+    std::os::unix::fs::symlink("elsewhere", &changed).unwrap();
+    let missing = repo.join(".claude/skills/missing");
+    fs::remove_file(&missing).unwrap();
+    assert!(git_check_ignore(&repo, ".claude/skills/missing"));
+
+    let report = purge::purge(&state, false).unwrap();
+    assert!(report.removed.contains(&repo.join(".claude/skills/deploy")));
+    assert_eq!(report.skipped.len(), 1);
+    assert!(fs::symlink_metadata(repo.join(".claude/skills/deploy")).is_err());
+    assert!(!git_check_ignore(&repo, ".claude/skills/missing"));
+    assert_eq!(fs::read_link(changed).unwrap(), PathBuf::from("elsewhere"));
+}
+
+#[test]
+fn repos_remove_cleans_managed_skill_excludes_without_removing_links() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    create_agent_skill(&repo, "deploy");
+    let state = fixture.state();
+    observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(repo.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+    assert!(git_check_ignore(&repo, ".claude/skills/deploy"));
+    drop(state);
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
+
+    let output = Command::new(bin)
+        .arg("repos")
+        .arg("remove")
+        .arg(&repo)
+        .arg("--clean-exclude")
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "repos remove failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!git_check_ignore(&repo, ".claude/skills/deploy"));
+    assert!(repo.join(".claude/skills/deploy/SKILL.md").is_file());
+}
+
+#[test]
+fn install_without_hooks_or_service_reconciles_global_skills() {
+    let fixture = Fixture::new();
+    let home = fixture.root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    create_agent_skill(&home, "deploy");
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
+
+    let output = Command::new(bin)
+        .arg("install")
+        .arg("--no-hooks")
+        .arg("--no-service")
+        .arg("--no-auto-migrate")
+        .arg("--bin")
+        .arg(bin)
+        .current_dir(&home)
+        .env("HOME", &home)
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "install failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_link(home.join(".claude/skills/deploy")).unwrap(),
+        PathBuf::from("../../.agents/skills/deploy")
+    );
+}
+
 #[test]
 fn observe_removes_stale_managed_symlink_after_source_deletion() {
     let fixture = Fixture::new();
@@ -4952,7 +5188,38 @@ fn state_cutover_archives_old_schema() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
+}
+
+#[test]
+fn state_v2_cutover_preserves_existing_settings() {
+    let fixture = Fixture::new();
+    let db_path = fixture.data.path().join("state.sqlite3");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);\n         INSERT INTO settings VALUES ('auto_migrate', 'true', CURRENT_TIMESTAMP);\n         PRAGMA user_version = 2;",
+    )
+    .unwrap();
+    drop(conn);
+
+    let state = State::open(fixture.data.path().to_path_buf()).unwrap();
+
+    assert_eq!(
+        state.get_setting("auto_migrate").unwrap().as_deref(),
+        Some("true")
+    );
+    assert!(
+        !fixture
+            .data
+            .path()
+            .join("state.pre-observed-cutover.sqlite3")
+            .exists()
+    );
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 3);
 }
 
 #[test]
@@ -5244,6 +5511,17 @@ fn git_stdout(repo: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+fn create_agent_skill(base: &Path, name: &str) -> PathBuf {
+    let skill = base.join(".agents/skills").join(name);
+    fs::create_dir_all(&skill).unwrap();
+    fs::write(
+        skill.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: Integration test skill\n---\n\nUse it.\n"),
+    )
+    .unwrap();
+    skill
 }
 
 fn git_status(repo: &Path, path: &str) -> String {

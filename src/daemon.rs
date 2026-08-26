@@ -13,6 +13,7 @@ use crate::{
     cli::DaemonArgs,
     config, git,
     reconciler::{self, ReconcileOptions},
+    skills,
     state::State,
 };
 
@@ -23,10 +24,13 @@ const DEFAULT_MAX_INSTRUCTION_DIRS: usize = 500;
 #[derive(Debug, Default, Serialize)]
 pub struct DaemonReport {
     pub instruction_dirs_checked: usize,
+    pub skill_roots_checked: usize,
     pub created: usize,
     pub repaired: usize,
     pub refreshed: usize,
     pub kept: usize,
+    pub cleaned: usize,
+    pub exclude_updates: usize,
     pub conflicts: usize,
     pub tracked_conflicts: usize,
     pub errors: usize,
@@ -38,7 +42,8 @@ pub fn run(args: &DaemonArgs, state: &State, dry_run: bool, json: bool) -> Resul
     let max = args
         .max_instruction_dirs
         .unwrap_or(DEFAULT_MAX_INSTRUCTION_DIRS);
-    let mut report = repair_once(state, dry_run, max)?;
+    let home = config::home_dir();
+    let mut report = repair_once_with_home(state, dry_run, max, home.as_deref())?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -54,10 +59,11 @@ pub fn run(args: &DaemonArgs, state: &State, dry_run: bool, json: bool) -> Resul
                 .unwrap_or(DEFAULT_REPAIR_INTERVAL_SECONDS),
         );
         thread::sleep(with_jitter(interval));
-        report = repair_once(state, false, max)?;
+        report = repair_once_with_home(state, false, max, home.as_deref())?;
         tracing::info!(
-            "repair tick checked={} created={} repaired={} errors={}",
+            "repair tick instruction_dirs={} skill_roots={} created={} repaired={} errors={}",
             report.instruction_dirs_checked,
+            report.skill_roots_checked,
             report.created,
             report.repaired,
             report.errors
@@ -66,6 +72,15 @@ pub fn run(args: &DaemonArgs, state: &State, dry_run: bool, json: bool) -> Resul
 }
 
 pub fn repair_once(state: &State, dry_run: bool, max: usize) -> Result<DaemonReport> {
+    repair_once_with_home(state, dry_run, max, None)
+}
+
+fn repair_once_with_home(
+    state: &State,
+    dry_run: bool,
+    max: usize,
+    home: Option<&Path>,
+) -> Result<DaemonReport> {
     let dirs = state.active_instruction_dirs(max)?;
     let mut report = DaemonReport {
         dry_run,
@@ -142,6 +157,73 @@ pub fn repair_once(state: &State, dry_run: bool, max: usize) -> Result<DaemonRep
         report.errors += reconcile.summary.errors;
     }
 
+    let skill_roots = state.active_skill_roots(max)?;
+    let global_is_observed = home.is_some_and(|home| {
+        skill_roots
+            .iter()
+            .any(|root| root.scope == "global" && same_path(&root.base_dir, home))
+    });
+    for skill_root in skill_roots {
+        match skills::reconcile_observed(&skill_root, state, dry_run) {
+            Ok(reconcile) => {
+                report.skill_roots_checked += 1;
+                report.created += reconcile.summary.created;
+                report.repaired += reconcile.summary.repaired;
+                report.kept += reconcile.summary.kept;
+                report.cleaned += reconcile.summary.cleaned;
+                report.exclude_updates += reconcile.summary.exclude_updates;
+                report.conflicts += reconcile.summary.conflicts;
+                report.tracked_conflicts += reconcile.summary.tracked_conflicts;
+                report.errors += reconcile.summary.errors;
+            }
+            Err(error) => {
+                report.errors += 1;
+                if !dry_run {
+                    state.mark_skill_root_result(
+                        skill_root.id,
+                        "error",
+                        Some(&error.to_string()),
+                    )?;
+                    state.record_event(
+                        "error",
+                        skill_root.repo_root.as_deref(),
+                        Some(skills::ADAPTER_NAME),
+                        "daemon",
+                        &error.to_string(),
+                    )?;
+                }
+            }
+        }
+    }
+
+    if let Some(home) = home.filter(|_| !global_is_observed) {
+        match skills::reconcile_global(home, state, dry_run) {
+            Ok(reconcile) => {
+                report.skill_roots_checked += 1;
+                report.created += reconcile.summary.created;
+                report.repaired += reconcile.summary.repaired;
+                report.kept += reconcile.summary.kept;
+                report.cleaned += reconcile.summary.cleaned;
+                report.exclude_updates += reconcile.summary.exclude_updates;
+                report.conflicts += reconcile.summary.conflicts;
+                report.tracked_conflicts += reconcile.summary.tracked_conflicts;
+                report.errors += reconcile.summary.errors;
+            }
+            Err(error) => {
+                report.errors += 1;
+                if !dry_run {
+                    state.record_event(
+                        "error",
+                        None,
+                        Some(skills::ADAPTER_NAME),
+                        "daemon",
+                        &error.to_string(),
+                    )?;
+                }
+            }
+        }
+    }
+
     Ok(report)
 }
 
@@ -204,11 +286,45 @@ fn print_plain(report: &DaemonReport) {
         "Checked {} instruction directories.",
         report.instruction_dirs_checked
     );
-    println!("Created {} shims.", report.created);
+    println!("Checked {} skill roots.", report.skill_roots_checked);
+    println!("Created {} shims and skill links.", report.created);
     println!("Repaired {} shims.", report.repaired);
     println!("Refreshed {} copies.", report.refreshed);
-    println!("Kept {} managed shims.", report.kept);
+    println!("Kept {} managed shims and skill links.", report.kept);
+    println!("Cleaned {} managed skill links.", report.cleaned);
+    println!("Updated {} exclude files.", report.exclude_updates);
     println!("Skipped {} conflicts.", report.conflicts);
     println!("Skipped {} tracked targets.", report.tracked_conflicts);
     println!("Errors {}.", report.errors);
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::fs;
+
+    use super::repair_once_with_home;
+    use crate::state::State;
+
+    #[test]
+    fn repair_checks_the_fixed_global_root_before_it_is_observed() {
+        let home = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let source = home.path().join(".agents/skills/deploy");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("SKILL.md"),
+            "---\nname: deploy\ndescription: Test skill\n---\n",
+        )
+        .unwrap();
+        let state = State::open(data.path().to_path_buf()).unwrap();
+
+        let report = repair_once_with_home(&state, false, 500, Some(home.path())).unwrap();
+
+        assert_eq!(report.skill_roots_checked, 1);
+        assert_eq!(report.created, 1);
+        assert_eq!(
+            fs::read_link(home.path().join(".claude/skills/deploy")).unwrap(),
+            std::path::PathBuf::from("../../.agents/skills/deploy")
+        );
+    }
 }

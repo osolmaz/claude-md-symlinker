@@ -14,6 +14,7 @@ use crate::{
     config::{self, AppConfig, LoadedConfig, ScanScope, WatchConfig},
     reconciler::{self, ReconcileOptions},
     reporting::{print_json, print_plain},
+    skills,
     state::State,
 };
 
@@ -164,7 +165,7 @@ fn run_once(
     state: &State,
     options: RunOptions,
 ) -> Result<()> {
-    let report = reconciler::apply(
+    let mut report = reconciler::apply(
         &active.config,
         active.config_existed,
         cli_roots,
@@ -173,6 +174,43 @@ fn run_once(
             dry_run: options.dry_run,
         },
     )?;
+    let home = config::home_dir();
+    let skill_roots = state.active_skill_roots(usize::MAX)?;
+    let global_is_observed = home.as_deref().is_some_and(|home| {
+        skill_roots
+            .iter()
+            .any(|root| root.scope == "global" && same_path(&root.base_dir, home))
+    });
+    for skill_root in skill_roots {
+        match skills::reconcile_observed(&skill_root, state, options.dry_run) {
+            Ok(skill_report) => report.extend(skill_report),
+            Err(error) => report.push(crate::reporting::RepoResult {
+                repo: skill_root
+                    .repo_root
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| skill_root.base_dir.display().to_string()),
+                adapter: skills::ADAPTER_NAME.to_string(),
+                source: skill_root.source_root.display().to_string(),
+                target: skill_root.target_root.display().to_string(),
+                status: crate::reporting::Status::Error,
+                message: error.to_string(),
+            }),
+        }
+    }
+    if let Some(home) = home.as_deref().filter(|_| !global_is_observed) {
+        match skills::reconcile_global(home, state, options.dry_run) {
+            Ok(skill_report) => report.extend(skill_report),
+            Err(error) => report.push(crate::reporting::RepoResult {
+                repo: home.display().to_string(),
+                adapter: skills::ADAPTER_NAME.to_string(),
+                source: home.join(".agents/skills").display().to_string(),
+                target: home.join(".claude/skills").display().to_string(),
+                status: crate::reporting::Status::Error,
+                message: error.to_string(),
+            }),
+        }
+    }
     if options.json {
         print_json(&report);
     } else {
@@ -241,6 +279,13 @@ fn desired_watch_targets(scope: &ScanScope, config_path: &Path) -> WatchTargets 
     targets
 }
 
+fn same_path(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
 fn insert_watch_target(targets: &mut WatchTargets, path: PathBuf, mode: RecursiveMode) {
     if targets.get(&path) == Some(&RecursiveMode::Recursive) {
         return;
@@ -294,9 +339,26 @@ fn path_is_relevant(
         return true;
     }
 
+    if path_is_skill_path(path) {
+        return true;
+    }
+
     adapters
         .iter()
         .any(|adapter| path.ends_with(&adapter.source) || path.ends_with(&adapter.target))
+}
+
+fn path_is_skill_path(path: &Path) -> bool {
+    let components = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    components
+        .windows(2)
+        .any(|pair| matches!(pair, [".agents", "skills"] | [".claude", "skills"]))
 }
 
 fn has_excluded_dir_component(path: &Path, scope: &ScanScope) -> bool {
@@ -357,6 +419,18 @@ mod tests {
         ));
         assert!(event_is_relevant(
             &event(root.join("repo/.git/index")),
+            &scope,
+            &adapters,
+            &config_path
+        ));
+        assert!(event_is_relevant(
+            &event(root.join("repo/.agents/skills/deploy/SKILL.md")),
+            &scope,
+            &adapters,
+            &config_path
+        ));
+        assert!(event_is_relevant(
+            &event(root.join("repo/.claude/skills/deploy/scripts/run.sh")),
             &scope,
             &adapters,
             &config_path

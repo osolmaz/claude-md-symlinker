@@ -32,6 +32,18 @@ AGENTS.md                # canonical file, committed to Git
 CLAUDE.md -> AGENTS.md   # local generated shim, ignored by Git
 ```
 
+It also gives Claude Code the same Agent Skills that other tools read from
+`.agents/skills`, without copying them:
+
+```text
+.agents/skills/deploy/                 # canonical skill directory
+.claude/skills/deploy -> ../../.agents/skills/deploy
+```
+
+The tool creates one relative link per skill. It never replaces the complete
+`.claude/skills` directory, so Claude-only, plugin, and unmanaged skills can
+stay beside managed links.
+
 Note: the initial version of this work was the
 [`CLAUDE.md` to `AGENTS.md` migration guide](https://solmaz.io/log/2025/09/08/claude-md-agents-md-migration-guide/),
 which documented a manual migration and symlink setup. This repo is the
@@ -101,7 +113,9 @@ claude-md-symlinker observe
 When Claude starts in or moves to a directory inside a Git repo,
 claude-md-symlinker checks that directory and each parent up to the repo root.
 For every `AGENTS.md` found on that path, it records the directory and creates
-or repairs the sibling `CLAUDE.md` shim.
+or repairs the sibling `CLAUDE.md` shim. At the same checked directories, each
+valid `.agents/skills/<name>/SKILL.md` is exposed through one managed relative
+link at `.claude/skills/<name>`.
 
 Example:
 
@@ -116,7 +130,13 @@ checked:
 /repo/AGENTS.md
 ```
 
-It does not descend into siblings or scan the repo tree.
+It does not descend into siblings or scan the repo tree. It also checks the
+fixed global pair `~/.agents/skills` and `~/.claude/skills`; it does not scan the
+rest of the home directory.
+
+A skill's full directory is linked, including scripts, references, and assets.
+Edits to the canonical directory are visible immediately. The tool does not
+copy skill contents.
 
 The background service runs:
 
@@ -124,11 +144,12 @@ The background service runs:
 claude-md-symlinker daemon
 ```
 
-It repairs only instruction directories already recorded by hooks. If a
-managed `CLAUDE.md` is deleted, the service recreates it on a later repair
-tick. If the sibling `AGENTS.md` is deleted, the service removes only an
-untracked managed `CLAUDE.md` symlink and its Git exclude entry. Managed
-copies, hardlinks, tracked files, and unknown files are left in place.
+It repairs only instruction and skill directories already recorded by hooks,
+plus the fixed global skill root. If a managed `CLAUDE.md` or skill link is
+deleted, the service recreates it on a later repair tick. If a canonical source
+is deleted, the service removes only an on-disk target whose link still proves
+that the tool owns it. Managed copies, hardlinks, tracked files, changed links,
+and unknown files are left in place.
 
 ## Commands
 
@@ -136,7 +157,7 @@ copies, hardlinks, tracked files, and unknown files are left in place.
 claude-md-symlinker status
 ```
 
-Shows hook, service, state, repo, and migration health.
+Shows hook, service, state, repo, skill, conflict, and migration health.
 
 ```sh
 claude-md-symlinker repos list
@@ -169,15 +190,30 @@ claude-md-symlinker settings set auto-migrate true
 claude-md-symlinker settings get auto-migrate
 ```
 
-Controls safe auto-migration.
+Controls safe instruction-file migration.
+
+```sh
+claude-md-symlinker skills migrate --dry-run
+claude-md-symlinker skills migrate
+```
+
+Replaces copied skill directories with relative links only when every path,
+file byte, and executable mode matches the canonical skill. The replacement is
+atomic and rolls back on failure. Normal reconciliation reports copied
+directories as conflicts and never replaces them. Migration works on skill
+roots that install, a hook, apply, watch, or the repair service has already
+observed.
+
+If another synchronizer has recorded ownership of a target, migration skips it.
+Use only one writer for each Claude skill target.
 
 ```sh
 claude-md-symlinker purge --dry-run
 claude-md-symlinker purge
 ```
 
-Deletes managed shims recorded in state, after confirming each file is still a
-managed shim on disk.
+Deletes managed instruction shims and skill links recorded in state, after
+confirming that each on-disk target still proves ownership.
 
 ```sh
 claude-md-symlinker uninstall
@@ -185,7 +221,8 @@ claude-md-symlinker uninstall --purge
 ```
 
 Removes managed Claude hooks and the user service. By default, uninstall leaves
-generated shims in place. `--purge` also removes managed shims.
+generated shims and skill links in place. `--purge` also removes proven managed
+targets.
 
 Global options:
 
@@ -233,6 +270,7 @@ claude-md-symlinker writes a managed block like:
 # claude-md-symlinker managed begin
 /CLAUDE.md
 /apps/web/CLAUDE.md
+/.claude/skills/deploy
 # claude-md-symlinker managed end
 ```
 
@@ -245,23 +283,32 @@ If `CLAUDE.md` already exists and is not managed:
 - No ignore entry is added for it during normal shim repair.
 - Git continues to show it normally.
 
-Tracked `CLAUDE.md` files are never changed during normal shim repair.
-Migration is the explicit path for converting them.
+Tracked `CLAUDE.md` files and tracked Claude skill targets are never changed
+during normal repair. Migration is the explicit path for converting instruction
+files or verified copied skills.
+
+Only individual managed project skill paths are ignored. The complete
+`.claude/skills` directory is never ignored. Global skills are outside Git and
+do not need exclude entries.
 
 ## Safety Model
 
 claude-md-symlinker is intentionally boring:
 
 - No whole-machine scan.
-- No default home-directory scan.
+- No home-directory scan; only the fixed global skill roots are checked.
 - No repo tree scan from hooks.
-- No overwriting unknown files.
+- No copied skill contents in the steady state.
+- No whole-root `.claude/skills` link or ignore rule.
+- No overwriting unknown files, directories, or links.
 - No normal writes to tracked `CLAUDE.md`.
 - No cleanup of tracked `CLAUDE.md`.
 - No source-missing cleanup of managed copies or hardlinks.
 - No generated shim commits.
 - No migration commits.
 - No cleanup based only on SQLite records.
+- No takeover of targets recorded by another skill synchronizer.
+- No Windows skill-link claim until directory links are implemented and tested.
 - Hooks exit successfully by default so Claude is not broken by this tool.
 
 The SQLite state directory can be overridden with:

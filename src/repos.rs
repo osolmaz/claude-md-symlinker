@@ -122,6 +122,20 @@ fn clean_excludes_for_repo(state: &State, repo_path: &Path) -> Result<usize> {
             updates += 1;
         }
     }
+    for link in state.managed_skill_links()? {
+        if link.repo_root.as_deref() != Some(repo.root.as_path()) {
+            continue;
+        }
+        let target_rel = link.target_path.strip_prefix(&repo.root)?;
+        if exclude::remove(
+            &repo,
+            target_rel,
+            crate::config::ExcludeMode::PerRepo,
+            false,
+        )? {
+            updates += 1;
+        }
+    }
     Ok(updates)
 }
 

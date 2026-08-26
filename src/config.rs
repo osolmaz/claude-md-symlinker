@@ -329,7 +329,7 @@ pub fn expand_tilde(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-fn home_dir() -> Option<PathBuf> {
+pub fn home_dir() -> Option<PathBuf> {
     UserDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
 }
 

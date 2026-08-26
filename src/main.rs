@@ -8,7 +8,7 @@ use claude_md_symlinker::{
     install, migration, observe, purge,
     reconciler::{self, ReconcileOptions},
     reporting::{print_json, print_plain},
-    repos, service,
+    repos, service, skills,
     state::State,
     watch,
 };
@@ -77,6 +77,26 @@ fn run() -> Result<u8> {
                 },
             )
         }
+        cli::Command::Skills(skills_args) => {
+            let state = command_state(args.dry_run)?;
+            match skills_args.command {
+                cli::SkillsCommand::Migrate => {
+                    let report = skills::migrate_recorded(&state, args.dry_run)?;
+                    if args.json {
+                        println!("{}", serde_json::to_string_pretty(&report)?);
+                    } else {
+                        skills::print_migration_plain(&report);
+                    }
+                    Ok(if report.errors.is_empty() && report.skipped.is_empty() {
+                        0
+                    } else if report.errors.is_empty() {
+                        2
+                    } else {
+                        1
+                    })
+                }
+            }
+        }
         cli::Command::Settings(settings_args) => {
             let state = command_state(args.dry_run)?;
             run_settings(settings_args, &state, args.dry_run, args.json)
@@ -93,6 +113,14 @@ fn run() -> Result<u8> {
             } else {
                 None
             };
+            let exit_code = if purge_report
+                .as_ref()
+                .is_some_and(|report| !report.skipped.is_empty())
+            {
+                2
+            } else {
+                0
+            };
             if args.json {
                 println!(
                     "{}",
@@ -104,10 +132,17 @@ fn run() -> Result<u8> {
             } else {
                 install::print_uninstall(&uninstall_report);
                 if let Some(purge_report) = &purge_report {
-                    println!("Purged {} managed shims.", purge_report.removed.len());
+                    println!(
+                        "Purged {} managed shims and skill links.",
+                        purge_report.removed.len()
+                    );
+                    println!("Skipped {} targets.", purge_report.skipped.len());
+                    for item in &purge_report.skipped {
+                        println!("  {}  {}", item.path.display(), item.reason);
+                    }
                 }
             }
-            Ok(0)
+            Ok(exit_code)
         }
         cli::Command::Init(init) => {
             let loaded = config::load(args.config.as_deref())?;

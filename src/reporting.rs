@@ -73,6 +73,13 @@ impl Report {
         self.results.push(result);
     }
 
+    pub fn extend(&mut self, other: Report) {
+        self.summary.exclude_updates += other.summary.exclude_updates;
+        for result in other.results {
+            self.push(result);
+        }
+    }
+
     pub fn exit_code(&self) -> u8 {
         if self.summary.errors > 0 {
             1
