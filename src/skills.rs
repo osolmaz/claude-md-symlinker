@@ -579,6 +579,41 @@ fn cleanup_missing_source(
         ));
         return Ok(());
     }
+    if let Some(target_rel) = root.target_rel(&link.target_path)?
+        && git::is_tracked(
+            root.repo.as_ref().expect("project target has repo"),
+            &target_rel,
+        )?
+    {
+        let exclude_updated = remove_project_exclude(root, &link.target_path, dry_run)?;
+        if exclude_updated {
+            report.summary.exclude_updates += 1;
+        }
+        let message = if exclude_updated {
+            "source is missing and target is tracked by Git; preserved target and removed stale managed exclude"
+        } else {
+            "source is missing and target is tracked by Git; preserved target"
+        };
+        if !dry_run {
+            state.record_skill_link(SkillLinkRecord {
+                skill_root_id: link.skill_root_id,
+                skill_name: &link.skill_name,
+                source_path: &link.source_path,
+                target_path: &link.target_path,
+                expected_link: &link.expected_link,
+                owned: false,
+                status: "tracked_conflict",
+                error: Some(message),
+            })?;
+        }
+        report.push(root_result(
+            root,
+            &link.skill_name,
+            Status::TrackedConflict,
+            message,
+        ));
+        return Ok(());
+    }
     match fs::symlink_metadata(&link.target_path) {
         Err(error) if error.kind() == ErrorKind::NotFound => {
             if remove_project_exclude(root, &link.target_path, dry_run)? {
