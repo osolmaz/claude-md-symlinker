@@ -62,6 +62,7 @@ impl DoctorReport {
         });
         if let Ok(state) = &state_result {
             checks.extend(managed_skill_link_checks(state)?);
+            checks.extend(recorded_external_skill_writer_checks(state)?);
         }
 
         checks.push(symlink_check());
@@ -149,6 +150,35 @@ fn managed_skill_link_checks(state: &State) -> Result<Vec<DoctorCheck>> {
                 ok: false,
                 message: format!("{}: {error}", link.target_path.display()),
             },
+        })
+        .collect())
+}
+
+fn recorded_external_skill_writer_checks(state: &State) -> Result<Vec<DoctorCheck>> {
+    Ok(state
+        .external_project_skill_conflicts()?
+        .into_iter()
+        .map(|conflict| {
+            let location = conflict
+                .repo_root
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| conflict.scope.clone());
+            let detail = conflict
+                .error
+                .as_deref()
+                .unwrap_or("target is claimed by another skill synchronizer");
+            DoctorCheck {
+                name: "skill_writer".to_string(),
+                ok: false,
+                message: format!(
+                    "recorded external writer conflict for {} skill `{}` at {} in {}: {detail}",
+                    conflict.scope,
+                    conflict.skill_name,
+                    conflict.target_path.display(),
+                    location
+                ),
+            }
         })
         .collect())
 }
@@ -294,7 +324,9 @@ fn external_skill_writer_check() -> DoctorCheck {
         Ok(None) => DoctorCheck {
             name: "skill_writer".to_string(),
             ok: true,
-            message: "no external Claude skill synchronizer state was detected".to_string(),
+            message:
+                "no external Claude skill synchronizer state was detected at the fixed global root"
+                    .to_string(),
         },
         Ok(Some(message)) => DoctorCheck {
             name: "skill_writer".to_string(),

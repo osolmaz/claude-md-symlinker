@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    fs,
     path::{Component, Path, PathBuf},
     sync::mpsc,
     thread,
@@ -25,6 +26,7 @@ struct ActiveConfig {
     config_existed: bool,
     scope: ScanScope,
     adapters: Vec<Adapter>,
+    home: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -58,7 +60,7 @@ pub fn run(
     sync_watches(
         &mut watcher,
         &mut watched,
-        desired_watch_targets(&active.scope, &config_path),
+        desired_watch_targets(&active.scope, &config_path, active.home.as_deref()),
     )?;
 
     run_once(&active, cli_roots, state, options)?;
@@ -75,8 +77,13 @@ pub fn run(
 
         match rx.recv_timeout(timeout) {
             Ok(Ok(event)) => {
-                let mut should_run =
-                    event_is_relevant(&event, &active.scope, &active.adapters, &config_path);
+                let mut should_run = event_is_relevant(
+                    &event,
+                    &active.scope,
+                    &active.adapters,
+                    &config_path,
+                    active.home.as_deref(),
+                );
                 thread::sleep(debounce);
                 while let Ok(result) = rx.try_recv() {
                     match result {
@@ -86,6 +93,7 @@ pub fn run(
                                 &active.scope,
                                 &active.adapters,
                                 &config_path,
+                                active.home.as_deref(),
                             );
                         }
                         Err(error) => tracing::warn!("watch error: {error}"),
@@ -152,7 +160,7 @@ fn reload_and_run(
     sync_watches(
         watcher,
         watched,
-        desired_watch_targets(&next.scope, config_path),
+        desired_watch_targets(&next.scope, config_path, next.home.as_deref()),
     )?;
     *active = next;
     run_once(active, cli_roots, state, options)?;
@@ -165,6 +173,7 @@ fn run_once(
     state: &State,
     options: RunOptions,
 ) -> Result<()> {
+    let home = active.home.as_deref();
     let mut report = reconciler::apply(
         &active.config,
         active.config_existed,
@@ -174,9 +183,8 @@ fn run_once(
             dry_run: options.dry_run,
         },
     )?;
-    let home = config::home_dir();
     let skill_roots = state.active_skill_roots(usize::MAX)?;
-    let global_is_observed = home.as_deref().is_some_and(|home| {
+    let global_is_observed = home.is_some_and(|home| {
         skill_roots
             .iter()
             .any(|root| root.scope == "global" && same_path(&root.base_dir, home))
@@ -198,7 +206,7 @@ fn run_once(
             }),
         }
     }
-    if let Some(home) = home.as_deref().filter(|_| !global_is_observed) {
+    if let Some(home) = home.filter(|_| !global_is_observed) {
         match skills::reconcile_global(home, state, options.dry_run) {
             Ok(skill_report) => report.extend(skill_report),
             Err(error) => report.push(crate::reporting::RepoResult {
@@ -227,6 +235,7 @@ fn active_config(loaded: LoadedConfig, cli_roots: &[PathBuf]) -> Result<ActiveCo
         config_existed: loaded.existed,
         scope,
         adapters,
+        home: config::home_dir(),
     })
 }
 
@@ -264,7 +273,11 @@ fn sync_watches(
     Ok(())
 }
 
-fn desired_watch_targets(scope: &ScanScope, config_path: &Path) -> WatchTargets {
+fn desired_watch_targets(
+    scope: &ScanScope,
+    config_path: &Path,
+    home: Option<&Path>,
+) -> WatchTargets {
     let mut targets = WatchTargets::new();
     for root in &scope.roots {
         insert_watch_target(&mut targets, root.clone(), RecursiveMode::Recursive);
@@ -276,7 +289,41 @@ fn desired_watch_targets(scope: &ScanScope, config_path: &Path) -> WatchTargets 
             RecursiveMode::NonRecursive,
         );
     }
+    if let Some(home) = home {
+        insert_global_watch_target(&mut targets, home, Path::new(".agents/skills"));
+        insert_global_watch_target(&mut targets, home, Path::new(".claude/skills"));
+    }
     targets
+}
+
+fn insert_global_watch_target(targets: &mut WatchTargets, home: &Path, relative: &Path) {
+    let Ok(home_metadata) = fs::symlink_metadata(home) else {
+        return;
+    };
+    if !home_metadata.is_dir() {
+        return;
+    }
+
+    let root = home.join(relative);
+    let mut existing = home.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(part) = component else {
+            break;
+        };
+        let next = existing.join(part);
+        match fs::symlink_metadata(&next) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                existing = next;
+            }
+            _ => break,
+        }
+    }
+    let mode = if existing == root {
+        RecursiveMode::Recursive
+    } else {
+        RecursiveMode::NonRecursive
+    };
+    insert_watch_target(targets, existing, mode);
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {
@@ -298,11 +345,12 @@ fn event_is_relevant(
     scope: &ScanScope,
     adapters: &[Adapter],
     config_path: &Path,
+    home: Option<&Path>,
 ) -> bool {
     event
         .paths
         .iter()
-        .any(|path| path_is_relevant(path, scope, adapters, config_path))
+        .any(|path| path_is_relevant(path, scope, adapters, config_path, home))
 }
 
 fn path_is_relevant(
@@ -310,8 +358,13 @@ fn path_is_relevant(
     scope: &ScanScope,
     adapters: &[Adapter],
     config_path: &Path,
+    home: Option<&Path>,
 ) -> bool {
     if path == config_path || config_path.parent().is_some_and(|parent| path == parent) {
+        return true;
+    }
+
+    if home.is_some_and(|home| global_skill_path_is_relevant(path, home)) {
         return true;
     }
 
@@ -346,6 +399,12 @@ fn path_is_relevant(
     adapters
         .iter()
         .any(|adapter| path.ends_with(&adapter.source) || path.ends_with(&adapter.target))
+}
+
+fn global_skill_path_is_relevant(path: &Path, home: &Path) -> bool {
+    [home.join(".agents/skills"), home.join(".claude/skills")]
+        .iter()
+        .any(|root| path.starts_with(root) || root.starts_with(path))
 }
 
 fn path_is_skill_path(path: &Path) -> bool {
@@ -388,11 +447,15 @@ fn ensure_watch_enabled(config: &AppConfig) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, path::PathBuf, time::Duration};
+    use std::{
+        collections::BTreeSet,
+        path::{Path, PathBuf},
+        time::Duration,
+    };
 
     use notify::{Event, EventKind, RecursiveMode, event::EventAttributes};
 
-    use super::{desired_watch_targets, event_is_relevant, periodic_interval};
+    use super::{desired_watch_targets, periodic_interval};
     use crate::{
         adapters::Adapter,
         config::{ScanScope, SourceMissingBehavior, WatchConfig},
@@ -504,13 +567,58 @@ mod tests {
         let config_dir = tempfile::tempdir().unwrap();
         let config_path = config_dir.path().join("claude-md-symlinker.toml");
 
-        let targets = desired_watch_targets(&scope, &config_path);
+        let targets = desired_watch_targets(&scope, &config_path, None);
 
         assert_eq!(targets.get(&root), Some(&RecursiveMode::Recursive));
         assert_eq!(
             targets.get(config_dir.path()),
             Some(&RecursiveMode::NonRecursive)
         );
+    }
+
+    #[test]
+    fn global_skill_events_and_watch_targets_are_bounded() {
+        let root = PathBuf::from("/workspace");
+        let scope = scope(root);
+        let adapters = adapters();
+        let config_dir = tempfile::tempdir().unwrap();
+        let config_path = config_dir.path().join("claude-md-symlinker.toml");
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".agents/skills")).unwrap();
+        std::fs::create_dir(home.path().join(".claude")).unwrap();
+
+        let targets = desired_watch_targets(&scope, &config_path, Some(home.path()));
+
+        assert_eq!(
+            targets.get(&home.path().join(".agents/skills")),
+            Some(&RecursiveMode::Recursive)
+        );
+        assert_eq!(
+            targets.get(&home.path().join(".claude")),
+            Some(&RecursiveMode::NonRecursive)
+        );
+        assert!(!targets.contains_key(home.path()));
+        assert!(super::event_is_relevant(
+            &event(home.path().join(".agents/skills/deploy/SKILL.md")),
+            &scope,
+            &adapters,
+            &config_path,
+            Some(home.path())
+        ));
+        assert!(super::event_is_relevant(
+            &event(home.path().join(".claude/skills")),
+            &scope,
+            &adapters,
+            &config_path,
+            Some(home.path())
+        ));
+        assert!(!super::event_is_relevant(
+            &event(home.path().join("Documents/note.txt")),
+            &scope,
+            &adapters,
+            &config_path,
+            Some(home.path())
+        ));
     }
 
     #[test]
@@ -555,6 +663,15 @@ mod tests {
             target: PathBuf::from("CLAUDE.md"),
             on_source_missing: SourceMissingBehavior::Leave,
         }]
+    }
+
+    fn event_is_relevant(
+        event: &Event,
+        scope: &ScanScope,
+        adapters: &[Adapter],
+        config_path: &Path,
+    ) -> bool {
+        super::event_is_relevant(event, scope, adapters, config_path, None)
     }
 
     fn event(path: PathBuf) -> Event {
