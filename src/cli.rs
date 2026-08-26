@@ -34,6 +34,8 @@ pub enum Command {
     Repos(ReposArgs),
     /// Migrate detected CLAUDE.md files to AGENTS.md.
     Migrate(MigrateArgs),
+    /// Manage Agent Skills compatibility links.
+    Skills(SkillsArgs),
     /// Manage local settings stored in state.
     Settings(SettingsArgs),
     /// Remove managed shims recorded in state.
@@ -142,6 +144,18 @@ pub struct MigrateArgs {
 
     #[arg(long)]
     pub no_git_add: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SkillsArgs {
+    #[command(subcommand)]
+    pub command: SkillsCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SkillsCommand {
+    /// Replace verified identical copied skills with managed relative links.
+    Migrate,
 }
 
 #[derive(Debug, Args)]

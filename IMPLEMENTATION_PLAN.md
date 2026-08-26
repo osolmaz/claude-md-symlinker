@@ -1,10 +1,10 @@
 # claude-md-symlinker Implementation Plan
 
 Status: the zero-config, install-and-forget implementation is now the primary
-product surface. The selected next change adds nonduplicating Agent Skills
-compatibility to the same hook, reconciliation, state, and repair model. The
-legacy root-scoped `init`, `apply`, `clean`, `watch`, and low-level `service`
-commands remain available. The implemented instruction-file model is:
+product surface. It includes nonduplicating Agent Skills compatibility in the
+same hook, reconciliation, state, and repair model. The legacy root-scoped
+`init`, `apply`, `clean`, `watch`, and low-level `service` commands remain
+available. The implemented instruction-file model is:
 
 ```text
 Claude hook observes cwd paths -> tool records AGENTS.md directories -> service repairs recorded shims

@@ -8,7 +8,7 @@ use crate::{
     adapters,
     config::ExcludeMode,
     config::{self, LoadedConfig},
-    git,
+    git, skills,
     state::State,
 };
 
@@ -44,7 +44,7 @@ impl DoctorReport {
         } else {
             State::open_default()
         };
-        checks.push(match state_result {
+        checks.push(match &state_result {
             Ok(_) => DoctorCheck {
                 name: "state".to_string(),
                 ok: true,
@@ -60,8 +60,13 @@ impl DoctorReport {
                 message: error.to_string(),
             },
         });
+        if let Ok(state) = &state_result {
+            checks.extend(managed_skill_link_checks(state)?);
+        }
 
         checks.push(symlink_check());
+        checks.push(skill_symlink_check());
+        checks.push(external_skill_writer_check());
 
         for root in &loaded.config.scan.roots {
             let expanded = config::expand_tilde(root);
@@ -117,6 +122,35 @@ impl DoctorReport {
             println!("{status}\t{}\t{}", check.name, check.message);
         }
     }
+}
+
+fn managed_skill_link_checks(state: &State) -> Result<Vec<DoctorCheck>> {
+    let links = state.managed_skill_links()?;
+    if links.is_empty() {
+        return Ok(vec![DoctorCheck {
+            name: "skill_links".to_string(),
+            ok: true,
+            message: "no managed Agent Skill links are recorded".to_string(),
+        }]);
+    }
+    Ok(links
+        .iter()
+        .map(|link| match skills::check_managed_link(link) {
+            Ok(()) => DoctorCheck {
+                name: "skill_link".to_string(),
+                ok: true,
+                message: format!(
+                    "managed skill link is healthy: {}",
+                    link.target_path.display()
+                ),
+            },
+            Err(error) => DoctorCheck {
+                name: "skill_link".to_string(),
+                ok: false,
+                message: format!("{}: {error}", link.target_path.display()),
+            },
+        })
+        .collect())
 }
 
 fn data_dir_check(dry_run: bool) -> DoctorCheck {
@@ -221,6 +255,60 @@ fn symlink_probe() -> Result<()> {
     Ok(())
 }
 
+fn skill_symlink_check() -> DoctorCheck {
+    match skill_symlink_probe() {
+        Ok(()) => DoctorCheck {
+            name: "skill_symlink".to_string(),
+            ok: true,
+            message: "directory symlink creation is available for Agent Skills".to_string(),
+        },
+        Err(error) => DoctorCheck {
+            name: "skill_symlink".to_string(),
+            ok: false,
+            message: format!("directory symlink creation failed: {error}"),
+        },
+    }
+}
+
+fn skill_symlink_probe() -> Result<()> {
+    let dir = tempdir()?;
+    let source = dir.path().join("source-dir");
+    let target = dir.path().join("target-dir");
+    fs::create_dir(&source)?;
+    symlink_dir(&source, &target)?;
+    if target.canonicalize()? != source.canonicalize()? {
+        anyhow::bail!("directory symlink did not resolve to the source")
+    }
+    Ok(())
+}
+
+fn external_skill_writer_check() -> DoctorCheck {
+    let Some(home) = config::home_dir() else {
+        return DoctorCheck {
+            name: "skill_writer".to_string(),
+            ok: false,
+            message: "could not determine the user home directory".to_string(),
+        };
+    };
+    match skills::external_writer_message(&home.join(".claude/skills")) {
+        Ok(None) => DoctorCheck {
+            name: "skill_writer".to_string(),
+            ok: true,
+            message: "no external Claude skill synchronizer state was detected".to_string(),
+        },
+        Ok(Some(message)) => DoctorCheck {
+            name: "skill_writer".to_string(),
+            ok: false,
+            message: format!("{message}; use one writer for each skill target"),
+        },
+        Err(error) => DoctorCheck {
+            name: "skill_writer".to_string(),
+            ok: false,
+            message: error.to_string(),
+        },
+    }
+}
+
 #[cfg(unix)]
 fn symlink_file(source: &PathBuf, target: &PathBuf) -> std::io::Result<()> {
     std::os::unix::fs::symlink(source, target)
@@ -229,4 +317,17 @@ fn symlink_file(source: &PathBuf, target: &PathBuf) -> std::io::Result<()> {
 #[cfg(windows)]
 fn symlink_file(source: &PathBuf, target: &PathBuf) -> std::io::Result<()> {
     std::os::windows::fs::symlink_file(source, target)
+}
+
+#[cfg(unix)]
+fn symlink_dir(source: &PathBuf, target: &PathBuf) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(source, target)
+}
+
+#[cfg(windows)]
+fn symlink_dir(_source: &PathBuf, _target: &PathBuf) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Agent Skills directory links are supported only on Linux and macOS",
+    ))
 }

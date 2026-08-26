@@ -16,6 +16,7 @@ use crate::{
     materializer::{self, TargetState},
     migration,
     reconciler::{self, ReconcileOptions},
+    skills,
     state::{DetectedClaudeRecord, State},
 };
 
@@ -24,6 +25,7 @@ pub struct ObserveReport {
     pub cwd: Option<PathBuf>,
     pub repo: Option<PathBuf>,
     pub instruction_dirs: Vec<PathBuf>,
+    pub skill_roots: Vec<PathBuf>,
     pub detected_claude_files: Vec<DetectedFileReport>,
     pub created: usize,
     pub repaired: usize,
@@ -32,6 +34,7 @@ pub struct ObserveReport {
     pub kept: usize,
     pub conflicts: usize,
     pub tracked_conflicts: usize,
+    pub exclude_updates: usize,
     pub errors: Vec<String>,
     pub dry_run: bool,
 }
@@ -43,7 +46,11 @@ pub struct DetectedFileReport {
 }
 
 pub fn run(args: &ObserveArgs, state: &State, dry_run: bool, json: bool) -> Result<u8> {
-    let result = observe(args, state, dry_run);
+    let result = if let Some(home) = crate::config::home_dir() {
+        observe_with_global(args, state, dry_run, &home)
+    } else {
+        observe(args, state, dry_run)
+    };
     let mut exit_code = 0;
     let report = match result {
         Ok(report) => report,
@@ -65,6 +72,23 @@ pub fn run(args: &ObserveArgs, state: &State, dry_run: bool, json: bool) -> Resu
     Ok(exit_code)
 }
 
+pub fn observe_with_global(
+    args: &ObserveArgs,
+    state: &State,
+    dry_run: bool,
+    home: &Path,
+) -> Result<ObserveReport> {
+    let mut report = observe(args, state, dry_run)?;
+    if !args.no_apply {
+        let skill_report = skills::reconcile_global(home, state, dry_run)?;
+        merge_skill_report(&mut report, skill_report);
+        if home.join(".agents/skills").exists() {
+            report.skill_roots.push(home.join(".agents/skills"));
+        }
+    }
+    Ok(report)
+}
+
 pub fn observe(args: &ObserveArgs, state: &State, dry_run: bool) -> Result<ObserveReport> {
     let cwd = resolve_cwd(args)?;
     let mut report = ObserveReport {
@@ -82,6 +106,17 @@ pub fn observe(args: &ObserveArgs, state: &State, dry_run: bool) -> Result<Obser
     let auto_migrate = state.setting_bool("auto_migrate", false)?;
 
     for dir in dirs {
+        let project_skill_root = dir.join(".agents/skills");
+        if project_skill_root.exists() {
+            report.skill_roots.push(project_skill_root);
+        }
+        if !args.no_apply {
+            match skills::reconcile_project_dir(&repo, &dir, state, dry_run) {
+                Ok(skill_report) => merge_skill_report(&mut report, skill_report),
+                Err(error) => report.errors.push(error.to_string()),
+            }
+        }
+
         let agents_path = dir.join("AGENTS.md");
         let claude_path = dir.join("CLAUDE.md");
         let source_rel = rel_path(&repo, &agents_path)?;
@@ -181,6 +216,23 @@ pub fn observe(args: &ObserveArgs, state: &State, dry_run: bool) -> Result<Obser
     }
 
     Ok(report)
+}
+
+fn merge_skill_report(report: &mut ObserveReport, skill_report: crate::reporting::Report) {
+    report.created += skill_report.summary.created;
+    report.repaired += skill_report.summary.repaired;
+    report.cleaned += skill_report.summary.cleaned;
+    report.kept += skill_report.summary.kept;
+    report.conflicts += skill_report.summary.conflicts;
+    report.tracked_conflicts += skill_report.summary.tracked_conflicts;
+    report.exclude_updates += skill_report.summary.exclude_updates;
+    report.errors.extend(
+        skill_report
+            .results
+            .into_iter()
+            .filter(|result| result.status == crate::reporting::Status::Error)
+            .map(|result| result.message),
+    );
 }
 
 fn resolve_cwd(args: &ObserveArgs) -> Result<PathBuf> {

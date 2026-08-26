@@ -16,6 +16,7 @@ pub mod reconciler;
 pub mod reporting;
 pub mod repos;
 pub mod service;
+pub mod skills;
 pub mod state;
 pub mod watch;
 

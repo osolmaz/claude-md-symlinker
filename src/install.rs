@@ -90,15 +90,15 @@ pub fn install(args: &InstallArgs, state: &State, dry_run: bool, json: bool) -> 
         install_service(&bin, args.unit_name.as_deref(), dry_run)?
     };
 
-    let observed = observe::observe(
-        &crate::cli::ObserveArgs {
-            no_apply: false,
-            strict: false,
-            cwd: Some(env::current_dir().context("failed to read current directory")?),
-        },
-        state,
-        dry_run,
-    )
+    let observe_args = crate::cli::ObserveArgs {
+        no_apply: false,
+        strict: false,
+        cwd: Some(env::current_dir().context("failed to read current directory")?),
+    };
+    let observed = match config::home_dir() {
+        Some(home) => observe::observe_with_global(&observe_args, state, dry_run, &home),
+        None => observe::observe(&observe_args, state, dry_run),
+    }
     .ok();
 
     let report = InstallReport {
@@ -787,7 +787,8 @@ fn print_install(report: &InstallReport) {
             "Observed {} instruction directories.",
             observed.instruction_dirs.len()
         );
-        println!("Created {} shims.", observed.created);
+        println!("Created {} shims and skill links.", observed.created);
+        println!("Observed {} skill roots.", observed.skill_roots.len());
         println!(
             "Detected {} CLAUDE.md files.",
             observed.detected_claude_files.len()
@@ -826,6 +827,13 @@ fn print_status(report: &StatusReport) {
     );
     println!("Observed repos: {}", report.state.observed_repos);
     println!("Instruction dirs: {}", report.state.instruction_dirs);
+    println!("Skill roots: {}", report.state.skill_roots);
+    println!("Managed skills: {}", report.state.managed_skills);
+    println!("Skill conflicts: {}", report.state.skill_conflicts);
+    println!(
+        "External skill writers: {}",
+        report.state.external_skill_conflicts
+    );
     println!(
         "Migration candidates: {}",
         report.state.migration_candidates

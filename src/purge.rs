@@ -9,6 +9,7 @@ use crate::{
     config::{AdapterConfig, ExcludeMode, SourceMissingBehavior},
     exclude, git,
     materializer::{self, TargetState},
+    skills,
     state::{ManagedShim, State},
 };
 
@@ -48,6 +49,16 @@ pub fn purge(state: &State, dry_run: bool) -> Result<PurgeReport> {
             Ok(None) => {}
             Err(error) => report.skipped.push(PurgeItem {
                 path: shim.repo_root.join(&shim.target_rel_path),
+                reason: error.to_string(),
+            }),
+        }
+    }
+    for link in state.managed_skill_links()? {
+        match skills::purge_link(&link, state, dry_run) {
+            Ok(Some(path)) => report.removed.push(path),
+            Ok(None) => {}
+            Err(error) => report.skipped.push(PurgeItem {
+                path: link.target_path,
                 reason: error.to_string(),
             }),
         }
@@ -99,11 +110,14 @@ fn print_plain(report: &PurgeReport) {
     if report.dry_run {
         println!("Dry run. No filesystem changes were made.");
     }
-    println!("Removed {} managed shims.", report.removed.len());
+    println!(
+        "Removed {} managed shims and skill links.",
+        report.removed.len()
+    );
     for path in &report.removed {
         println!("  {}", path.display());
     }
-    println!("Skipped {} files.", report.skipped.len());
+    println!("Skipped {} targets.", report.skipped.len());
     for item in &report.skipped {
         println!("  {}  {}", item.path.display(), item.reason);
     }

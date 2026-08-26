@@ -5,12 +5,13 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, params};
 use serde::Serialize;
 
 use crate::{config, git::GitRepo, materializer::MaterializationKind, reporting::Status};
 
-const STATE_VERSION: i64 = 2;
+const STATE_VERSION: i64 = 3;
+const PREVIOUS_STATE_VERSION: i64 = 2;
 const STATE_FILE: &str = "state.sqlite3";
 const CUTOVER_ARCHIVE: &str = "state.pre-observed-cutover.sqlite3";
 
@@ -49,6 +50,27 @@ pub struct DetectedClaudeRecord<'a> {
     pub classification: &'a str,
     pub content_hash: Option<&'a str>,
     pub status: Option<&'a str>,
+    pub error: Option<&'a str>,
+}
+
+pub struct SkillRootRecord<'a> {
+    pub scope: &'a str,
+    pub repo: Option<&'a GitRepo>,
+    pub base_dir: &'a Path,
+    pub source_root: &'a Path,
+    pub target_root: &'a Path,
+    pub status: &'a str,
+    pub error: Option<&'a str>,
+}
+
+pub struct SkillLinkRecord<'a> {
+    pub skill_root_id: i64,
+    pub skill_name: &'a str,
+    pub source_path: &'a Path,
+    pub target_path: &'a Path,
+    pub expected_link: &'a Path,
+    pub owned: bool,
+    pub status: &'a str,
     pub error: Option<&'a str>,
 }
 
@@ -99,10 +121,37 @@ pub struct ManagedShim {
     pub materialization: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ObservedSkillRoot {
+    pub id: i64,
+    pub scope: String,
+    pub repo_root: Option<PathBuf>,
+    pub base_dir: PathBuf,
+    pub source_root: PathBuf,
+    pub target_root: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct ManagedSkillLink {
+    pub id: i64,
+    pub skill_root_id: i64,
+    pub scope: String,
+    pub repo_root: Option<PathBuf>,
+    pub skill_name: String,
+    pub source_path: PathBuf,
+    pub target_path: PathBuf,
+    pub expected_link: PathBuf,
+    pub owned: bool,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct StateCounts {
     pub observed_repos: usize,
     pub instruction_dirs: usize,
+    pub skill_roots: usize,
+    pub managed_skills: usize,
+    pub skill_conflicts: usize,
+    pub external_skill_conflicts: usize,
     pub migration_candidates: usize,
     pub recent_errors: usize,
     pub last_reconciled_at: Option<String>,
@@ -539,6 +588,202 @@ impl State {
         Ok((repo_count, dir_count))
     }
 
+    pub fn record_skill_root(&self, record: SkillRootRecord<'_>) -> Result<i64> {
+        let Some(conn) = &self.conn else {
+            return Ok(0);
+        };
+        let repository_id = record
+            .repo
+            .map(|repo| self.ensure_repository(repo, "claude-hook", Some(record.base_dir)))
+            .transpose()?;
+        conn.execute(
+            r#"
+            INSERT INTO observed_skill_roots
+              (scope, repository_id, base_dir, source_root, target_root, first_seen_at,
+               last_seen_at, last_reconciled_at, last_status, last_error, active)
+            VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP, ?6, ?7, 1)
+            ON CONFLICT(scope, base_dir) DO UPDATE SET
+              repository_id = excluded.repository_id,
+              source_root = excluded.source_root,
+              target_root = excluded.target_root,
+              last_seen_at = CURRENT_TIMESTAMP,
+              last_reconciled_at = CURRENT_TIMESTAMP,
+              last_status = excluded.last_status,
+              last_error = excluded.last_error,
+              active = 1
+            "#,
+            params![
+                record.scope,
+                repository_id,
+                record.base_dir.to_string_lossy(),
+                record.source_root.to_string_lossy(),
+                record.target_root.to_string_lossy(),
+                record.status,
+                record.error,
+            ],
+        )?;
+        conn.query_row(
+            "SELECT id FROM observed_skill_roots WHERE scope = ?1 AND base_dir = ?2",
+            params![record.scope, record.base_dir.to_string_lossy()],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+    }
+
+    pub fn skill_root_for_base(
+        &self,
+        scope: &str,
+        base_dir: &Path,
+    ) -> Result<Option<ObservedSkillRoot>> {
+        let Some(conn) = &self.conn else {
+            return Ok(None);
+        };
+        conn.query_row(
+            r#"
+            SELECT sr.id, sr.scope, r.root_path, sr.base_dir, sr.source_root, sr.target_root
+            FROM observed_skill_roots sr
+            LEFT JOIN observed_repositories r ON r.id = sr.repository_id
+            WHERE sr.scope = ?1 AND sr.base_dir = ?2 AND sr.active = 1
+            "#,
+            params![scope, base_dir.to_string_lossy()],
+            skill_root_from_row,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn active_skill_roots(&self, limit: usize) -> Result<Vec<ObservedSkillRoot>> {
+        let Some(conn) = &self.conn else {
+            return Ok(Vec::new());
+        };
+        let mut statement = conn.prepare(
+            r#"
+            SELECT sr.id, sr.scope, r.root_path, sr.base_dir, sr.source_root, sr.target_root
+            FROM observed_skill_roots sr
+            LEFT JOIN observed_repositories r ON r.id = sr.repository_id
+            WHERE sr.active = 1 AND (r.id IS NULL OR r.active = 1)
+            ORDER BY sr.last_seen_at DESC, sr.id DESC
+            LIMIT ?1
+            "#,
+        )?;
+        let rows = statement.query_map(params![limit as i64], skill_root_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn record_skill_link(&self, record: SkillLinkRecord<'_>) -> Result<()> {
+        let Some(conn) = &self.conn else {
+            return Ok(());
+        };
+        conn.execute(
+            r#"
+            INSERT INTO skill_links
+              (skill_root_id, skill_name, source_path, target_path, expected_link, owned,
+               first_seen_at, last_seen_at, last_reconciled_at, last_status, last_error, removed_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP, ?7, ?8, NULL)
+            ON CONFLICT(skill_root_id, skill_name) DO UPDATE SET
+              source_path = excluded.source_path,
+              target_path = excluded.target_path,
+              expected_link = excluded.expected_link,
+              owned = excluded.owned,
+              last_seen_at = CURRENT_TIMESTAMP,
+              last_reconciled_at = CURRENT_TIMESTAMP,
+              last_status = excluded.last_status,
+              last_error = excluded.last_error,
+              removed_at = NULL
+            "#,
+            params![
+                record.skill_root_id,
+                record.skill_name,
+                record.source_path.to_string_lossy(),
+                record.target_path.to_string_lossy(),
+                record.expected_link.to_string_lossy(),
+                record.owned,
+                record.status,
+                record.error,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn skill_links_for_root(&self, skill_root_id: i64) -> Result<Vec<ManagedSkillLink>> {
+        let Some(conn) = &self.conn else {
+            return Ok(Vec::new());
+        };
+        let mut statement = conn.prepare(
+            r#"
+            SELECT sl.id, sl.skill_root_id, sr.scope, r.root_path, sl.skill_name,
+                   sl.source_path, sl.target_path, sl.expected_link, sl.owned
+            FROM skill_links sl
+            JOIN observed_skill_roots sr ON sr.id = sl.skill_root_id
+            LEFT JOIN observed_repositories r ON r.id = sr.repository_id
+            WHERE sl.skill_root_id = ?1 AND sl.removed_at IS NULL AND sl.owned = 1
+            ORDER BY sl.skill_name
+            "#,
+        )?;
+        let rows = statement.query_map(params![skill_root_id], skill_link_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn managed_skill_links(&self) -> Result<Vec<ManagedSkillLink>> {
+        let Some(conn) = &self.conn else {
+            return Ok(Vec::new());
+        };
+        let mut statement = conn.prepare(
+            r#"
+            SELECT sl.id, sl.skill_root_id, sr.scope, r.root_path, sl.skill_name,
+                   sl.source_path, sl.target_path, sl.expected_link, sl.owned
+            FROM skill_links sl
+            JOIN observed_skill_roots sr ON sr.id = sl.skill_root_id
+            LEFT JOIN observed_repositories r ON r.id = sr.repository_id
+            WHERE sr.active = 1
+              AND (r.id IS NULL OR r.active = 1)
+              AND sl.removed_at IS NULL
+              AND sl.owned = 1
+            ORDER BY sl.last_seen_at DESC, sl.id DESC
+            "#,
+        )?;
+        let rows = statement.query_map([], skill_link_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn mark_skill_link_removed(&self, link_id: i64) -> Result<()> {
+        let Some(conn) = &self.conn else {
+            return Ok(());
+        };
+        conn.execute(
+            "UPDATE skill_links SET removed_at = CURRENT_TIMESTAMP, last_status = 'cleaned' WHERE id = ?1 AND removed_at IS NULL",
+            params![link_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_skill_root_result(
+        &self,
+        skill_root_id: i64,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let Some(conn) = &self.conn else {
+            return Ok(());
+        };
+        conn.execute(
+            r#"
+            UPDATE observed_skill_roots
+            SET last_reconciled_at = CURRENT_TIMESTAMP,
+                last_status = ?2,
+                last_error = ?3
+            WHERE id = ?1
+            "#,
+            params![skill_root_id, status, error],
+        )?;
+        Ok(())
+    }
+
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         let Some(conn) = &self.conn else {
             return Ok(());
@@ -589,6 +834,22 @@ impl State {
                 conn,
                 "SELECT COUNT(*) FROM observed_instruction_dirs d JOIN observed_repositories r ON r.id = d.repository_id WHERE r.active = 1 AND d.active = 1",
             )?,
+            skill_roots: query_count(
+                conn,
+                "SELECT COUNT(*) FROM observed_skill_roots sr LEFT JOIN observed_repositories r ON r.id = sr.repository_id WHERE sr.active = 1 AND (r.id IS NULL OR r.active = 1)",
+            )?,
+            managed_skills: query_count(
+                conn,
+                "SELECT COUNT(*) FROM skill_links sl JOIN observed_skill_roots sr ON sr.id = sl.skill_root_id LEFT JOIN observed_repositories r ON r.id = sr.repository_id WHERE sr.active = 1 AND (r.id IS NULL OR r.active = 1) AND sl.removed_at IS NULL AND sl.owned = 1 AND sl.last_status IN ('created', 'repaired', 'kept', 'adopted', 'migrated')",
+            )?,
+            skill_conflicts: query_count(
+                conn,
+                "SELECT COUNT(*) FROM skill_links sl JOIN observed_skill_roots sr ON sr.id = sl.skill_root_id LEFT JOIN observed_repositories r ON r.id = sr.repository_id WHERE sr.active = 1 AND (r.id IS NULL OR r.active = 1) AND sl.removed_at IS NULL AND sl.owned = 0 AND sl.last_status IN ('conflict', 'invalid', 'external_conflict', 'tracked_conflict', 'error')",
+            )?,
+            external_skill_conflicts: query_count(
+                conn,
+                "SELECT COUNT(*) FROM skill_links sl JOIN observed_skill_roots sr ON sr.id = sl.skill_root_id LEFT JOIN observed_repositories r ON r.id = sr.repository_id WHERE sr.active = 1 AND (r.id IS NULL OR r.active = 1) AND sl.removed_at IS NULL AND sl.owned = 0 AND sl.last_status = 'external_conflict'",
+            )?,
             migration_candidates: query_count(
                 conn,
                 "SELECT COUNT(*) FROM detected_claude_files f JOIN observed_repositories r ON r.id = f.repository_id WHERE r.active = 1 AND f.migrated_at IS NULL AND f.classification IN ('user_file', 'tracked_user_file')",
@@ -599,7 +860,14 @@ impl State {
             )?,
             last_reconciled_at: conn
                 .query_row(
-                    "SELECT MAX(last_reconciled_at) FROM observed_instruction_dirs",
+                    r#"
+                    SELECT MAX(reconciled_at)
+                    FROM (
+                      SELECT last_reconciled_at AS reconciled_at FROM observed_instruction_dirs
+                      UNION ALL
+                      SELECT last_reconciled_at AS reconciled_at FROM observed_skill_roots
+                    )
+                    "#,
                     [],
                     |row| row.get(0),
                 )
@@ -798,6 +1066,41 @@ impl State {
               FOREIGN KEY(instruction_dir_id) REFERENCES observed_instruction_dirs(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS observed_skill_roots (
+              id INTEGER PRIMARY KEY,
+              scope TEXT NOT NULL CHECK(scope IN ('project', 'global')),
+              repository_id INTEGER,
+              base_dir TEXT NOT NULL,
+              source_root TEXT NOT NULL,
+              target_root TEXT NOT NULL,
+              first_seen_at TEXT NOT NULL,
+              last_seen_at TEXT NOT NULL,
+              last_reconciled_at TEXT,
+              last_status TEXT,
+              last_error TEXT,
+              active INTEGER NOT NULL DEFAULT 1,
+              UNIQUE(scope, base_dir),
+              FOREIGN KEY(repository_id) REFERENCES observed_repositories(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS skill_links (
+              id INTEGER PRIMARY KEY,
+              skill_root_id INTEGER NOT NULL,
+              skill_name TEXT NOT NULL,
+              source_path TEXT NOT NULL,
+              target_path TEXT NOT NULL,
+              expected_link TEXT NOT NULL,
+              owned INTEGER NOT NULL DEFAULT 0,
+              first_seen_at TEXT NOT NULL,
+              last_seen_at TEXT NOT NULL,
+              last_reconciled_at TEXT NOT NULL,
+              last_status TEXT NOT NULL,
+              last_error TEXT,
+              removed_at TEXT,
+              UNIQUE(skill_root_id, skill_name),
+              FOREIGN KEY(skill_root_id) REFERENCES observed_skill_roots(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS events (
               id INTEGER PRIMARY KEY,
               occurred_at TEXT NOT NULL,
@@ -814,11 +1117,36 @@ impl State {
               updated_at TEXT NOT NULL
             );
 
-            PRAGMA user_version = 2;
+            PRAGMA user_version = 3;
             "#,
         )?;
         Ok(())
     }
+}
+
+fn skill_root_from_row(row: &Row<'_>) -> rusqlite::Result<ObservedSkillRoot> {
+    Ok(ObservedSkillRoot {
+        id: row.get(0)?,
+        scope: row.get(1)?,
+        repo_root: row.get::<_, Option<String>>(2)?.map(PathBuf::from),
+        base_dir: PathBuf::from(row.get::<_, String>(3)?),
+        source_root: PathBuf::from(row.get::<_, String>(4)?),
+        target_root: PathBuf::from(row.get::<_, String>(5)?),
+    })
+}
+
+fn skill_link_from_row(row: &Row<'_>) -> rusqlite::Result<ManagedSkillLink> {
+    Ok(ManagedSkillLink {
+        id: row.get(0)?,
+        skill_root_id: row.get(1)?,
+        scope: row.get(2)?,
+        repo_root: row.get::<_, Option<String>>(3)?.map(PathBuf::from),
+        skill_name: row.get(4)?,
+        source_path: PathBuf::from(row.get::<_, String>(5)?),
+        target_path: PathBuf::from(row.get::<_, String>(6)?),
+        expected_link: PathBuf::from(row.get::<_, String>(7)?),
+        owned: row.get(8)?,
+    })
 }
 
 fn archive_old_state_if_needed(db_path: &Path) -> Result<()> {
@@ -834,7 +1162,7 @@ fn archive_old_state_if_needed(db_path: &Path) -> Result<()> {
     )?;
     drop(conn);
 
-    if version == STATE_VERSION || table_count == 0 {
+    if version == STATE_VERSION || version == PREVIOUS_STATE_VERSION || table_count == 0 {
         return Ok(());
     }
 

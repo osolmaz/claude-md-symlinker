@@ -9,6 +9,7 @@ use crate::{
     git::GitRepo,
     materializer::{self, MaterializationKind, TargetState},
     reporting::{RepoResult, Report, Status},
+    skills,
     state::{ShimRecord, State, TargetedShimRecord},
 };
 
@@ -64,6 +65,18 @@ pub fn apply(
                 report.summary.exclude_updates += 1;
             }
             report.push(result);
+        }
+
+        match skills::reconcile_project_dir(&repo, &repo.root, state, options.dry_run) {
+            Ok(skill_report) => report.extend(skill_report),
+            Err(error) => report.push(RepoResult {
+                repo: repo.root.display().to_string(),
+                adapter: skills::ADAPTER_NAME.to_string(),
+                source: ".agents/skills".to_string(),
+                target: ".claude/skills".to_string(),
+                status: Status::Error,
+                message: error.to_string(),
+            }),
         }
     }
 
