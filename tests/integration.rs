@@ -2606,6 +2606,58 @@ fn doctor_dry_run_does_not_create_state() {
 }
 
 #[test]
+fn doctor_reports_recorded_project_external_skill_writer_conflict() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    create_agent_skill(&repo, "deploy");
+    let target_root = repo.join(".claude/skills");
+    fs::create_dir_all(&target_root).unwrap();
+    fs::write(
+        target_root.join(".onurpi-agents-sync.json"),
+        r#"{"managed_skill_ids":["deploy"],"pending_skill_ids":[]}"#,
+    )
+    .unwrap();
+    let state = fixture.state();
+    observe::observe(
+        &ObserveArgs {
+            no_apply: false,
+            strict: true,
+            cwd: Some(repo.clone()),
+        },
+        &state,
+        false,
+    )
+    .unwrap();
+    drop(state);
+    let home = fixture.root.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let config_path = fixture.root.path().join("doctor-config.toml");
+    fs::write(
+        &config_path,
+        format!("[scan]\nroots = [\"{}\"]\n", repo.display()),
+    )
+    .unwrap();
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
+
+    let doctor = Command::new(bin)
+        .env("HOME", &home)
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
+        .args([
+            "--dry-run",
+            "--config",
+            config_path.to_str().unwrap(),
+            "doctor",
+        ])
+        .output()
+        .expect("doctor runs");
+
+    assert_eq!(doctor.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&doctor.stdout);
+    assert!(stdout.contains("recorded external writer conflict for project skill `deploy`"));
+    assert!(stdout.contains(repo.to_str().unwrap()));
+}
+
+#[test]
 fn per_repo_mode_conflict_unignores_owned_global_exclude() {
     let fixture = Fixture::new();
     let repo = fixture.repo("repo");
@@ -3000,6 +3052,48 @@ fn watch_repairs_an_observed_nested_skill_link() {
         wait_until(Duration::from_secs(5), || fs::symlink_metadata(&target)
             .is_ok()),
         "skill event did not trigger watch reconciliation"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+#[test]
+fn watch_reconciles_new_global_skill_from_filesystem_event() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo("repo");
+    fs::write(repo.join("AGENTS.md"), "canonical\n").unwrap();
+    let config_path = fixture.root.path().join("watch-global-skills.toml");
+    write_config_roots(&config_path, &[&repo]);
+    let home = fixture.root.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let bin = env!("CARGO_BIN_EXE_claude-md-symlinker");
+
+    let mut child = Command::new(bin)
+        .env("HOME", &home)
+        .env("CLAUDE_MD_SYMLINKER_DATA_DIR", fixture.data.path())
+        .current_dir(fixture.root.path())
+        .args(["--config", "watch-global-skills.toml", "watch"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("watch starts");
+
+    assert!(
+        wait_until(Duration::from_secs(5), || repo.join("CLAUDE.md").exists()),
+        "initial reconciliation did not complete"
+    );
+    create_agent_skill(&home, "deploy");
+    let target = home.join(".claude/skills/deploy");
+    assert!(
+        wait_until(Duration::from_secs(5), || fs::symlink_metadata(&target)
+            .is_ok()),
+        "global skill event did not trigger watch reconciliation"
+    );
+    assert_eq!(
+        fs::read_link(&target).unwrap(),
+        PathBuf::from("../../.agents/skills/deploy")
     );
 
     let _ = child.kill();

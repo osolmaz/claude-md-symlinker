@@ -144,6 +144,15 @@ pub struct ManagedSkillLink {
     pub owned: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct ExternalSkillConflict {
+    pub scope: String,
+    pub repo_root: Option<PathBuf>,
+    pub skill_name: String,
+    pub target_path: PathBuf,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct StateCounts {
     pub observed_repos: usize,
@@ -747,6 +756,38 @@ impl State {
             "#,
         )?;
         let rows = statement.query_map([], skill_link_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn external_project_skill_conflicts(&self) -> Result<Vec<ExternalSkillConflict>> {
+        let Some(conn) = &self.conn else {
+            return Ok(Vec::new());
+        };
+        let mut statement = conn.prepare(
+            r#"
+            SELECT sr.scope, r.root_path, sl.skill_name, sl.target_path, sl.last_error
+            FROM skill_links sl
+            JOIN observed_skill_roots sr ON sr.id = sl.skill_root_id
+            LEFT JOIN observed_repositories r ON r.id = sr.repository_id
+            WHERE sr.active = 1
+              AND sr.scope = 'project'
+              AND r.active = 1
+              AND sl.removed_at IS NULL
+              AND sl.owned = 0
+              AND sl.last_status = 'external_conflict'
+            ORDER BY sl.last_seen_at DESC, sl.id DESC
+            "#,
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(ExternalSkillConflict {
+                scope: row.get(0)?,
+                repo_root: row.get::<_, Option<String>>(1)?.map(PathBuf::from),
+                skill_name: row.get(2)?,
+                target_path: PathBuf::from(row.get::<_, String>(3)?),
+                error: row.get(4)?,
+            })
+        })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
