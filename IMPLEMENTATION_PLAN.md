@@ -1,8 +1,10 @@
 # claude-md-symlinker Implementation Plan
 
 Status: the zero-config, install-and-forget implementation is now the primary
-product surface. The legacy root-scoped `init`, `apply`, `clean`, `watch`, and
-low-level `service` commands remain available. The implemented model is:
+product surface. The selected next change adds nonduplicating Agent Skills
+compatibility to the same hook, reconciliation, state, and repair model. The
+legacy root-scoped `init`, `apply`, `clean`, `watch`, and low-level `service`
+commands remain available. The implemented instruction-file model is:
 
 ```text
 Claude hook observes cwd paths -> tool records AGENTS.md directories -> service repairs recorded shims
@@ -14,8 +16,9 @@ support in later cleanup.
 ## Goal
 
 Build claude-md-symlinker as a local compatibility manager that keeps
-`AGENTS.md` canonical while making Claude-compatible `CLAUDE.md` shims appear in
-instruction directories Claude actually enters.
+`AGENTS.md` and `.agents/skills` canonical while making Claude-compatible
+`CLAUDE.md` file shims and `.claude/skills` directory links appear where Claude
+Code expects them.
 
 The core promise:
 
@@ -52,8 +55,304 @@ claude-md-symlinker must preserve these invariants:
     a global scan.
 16. Explicit migration may rename tracked `CLAUDE.md` to `AGENTS.md`, stage the
     resulting `AGENTS.md`, and must never commit.
-17. This is a cutover release: old config/state formats do not need
-    compatibility migrations.
+17. Skill state uses an in-place hard cutover to one active contract. Do not
+    keep dual readers or writers, and preserve existing instruction-file
+    records and behavior through the schema change.
+18. `.agents/skills` is the canonical Agent Skills root.
+19. Each managed skill is an immediate child directory with a valid, regular
+    `SKILL.md` file.
+20. Each Claude compatibility target is one relative directory symlink under
+    `.claude/skills`; the complete `.claude/skills` root is never replaced or
+    linked.
+21. Skill contents are never copied in the steady state.
+22. Existing unmanaged, plugin, and Claude-only skills must coexist with
+    managed links.
+23. The file adapter and the skill-collection adapter use the same ownership
+    and safety principles, but remain separate resource types.
+24. State alone is not proof that an on-disk skill target is managed.
+25. A copied target directory is a conflict during normal reconciliation.
+26. Copied skills may be replaced only by an explicit, verified, atomic
+    migration.
+27. One writer owns each compatibility target. The tool does not take over a
+    target owned by another synchronizer.
+28. Project and global skill support use the existing hooks and repair service.
+    They do not add another daemon or a home-directory scan.
+
+## Agent Skills Compatibility Plan
+
+### Canonical Layout
+
+Project skills use this mapping:
+
+```text
+.agents/skills/deploy/                 # canonical skill directory
+.agents/skills/deploy/SKILL.md         # required skill file
+.claude/skills/deploy -> ../../.agents/skills/deploy
+```
+
+Global skills use the equivalent mapping below the user's home directory:
+
+```text
+~/.agents/skills/deploy/
+~/.agents/skills/deploy/SKILL.md
+~/.claude/skills/deploy -> ../../.agents/skills/deploy
+```
+
+The relative target is calculated from each target parent. Repository moves do
+not break a correctly generated project link.
+
+The tool creates one link for each skill. It must not replace
+`.claude/skills` with one root link. This allows managed skills to coexist with
+unmanaged directories, Claude-only skills, and plugin-managed entries.
+
+A skill link exposes the canonical directory directly. An edit to `SKILL.md`,
+a script, a reference, or an asset is visible through the Claude path at once.
+No refresh or content synchronization is required.
+
+### Adapter Model
+
+Keep the current instruction-file behavior. Add a separate skill-collection
+adapter with these responsibilities:
+
+- Read immediate skill children from a canonical `.agents/skills` root.
+- Validate each source before creating a target.
+- Map each valid source child to the child with the same name under the
+  corresponding `.claude/skills` root.
+- Classify target ownership and conflicts.
+- Create, adopt, repair, report, and remove only per-skill directory links.
+
+Do not make directory links use the file materialization fallback. Copy and
+hardlink modes do not satisfy the nonduplicating skill contract.
+
+### Source Discovery and Validation
+
+A source skill is one immediate child directory of `.agents/skills` with a
+valid, regular `SKILL.md`. Its complete tree is one unit. This includes optional
+`scripts`, `references`, `assets`, and other nested files allowed by the Agent
+Skills format.
+
+A malformed or unsafe source must produce a clear report and no new target.
+Validation must reject path escape and unsafe filesystem shapes. Validation
+must not follow a source or target outside its allowed canonical boundary.
+
+Project discovery is hook-directed:
+
+1. Resolve the current directory to its Git repository.
+2. Check the current directory and each parent through the repository root.
+3. Reconcile `.agents/skills` at each directory on that path when it exists.
+4. Record observed project skill roots for later repair.
+
+Global discovery checks the fixed pair `~/.agents/skills` and
+`~/.claude/skills`. It does not scan the user's home directory.
+
+The Claude hook stays bounded. It does not scan an entire repository for skill
+roots. The existing repair service revisits recorded project roots and the
+fixed global root. Hooks, direct commands, watch mode, and the service must call
+the same reconciler.
+
+### Target Classification and Ownership
+
+For each valid source skill, classify the target as one of these practical
+states:
+
+- Missing target.
+- Exact link to the expected source.
+- Proven managed link that needs repair.
+- Unmanaged regular directory.
+- Unmanaged file.
+- Unmanaged symlink.
+- Invalid or unsafe parent path.
+
+Apply these rules:
+
+- Create a relative directory symlink when the target is missing.
+- Adopt an existing link only when it resolves to the exact expected source.
+- Repair only a target whose state and on-disk identity prove that the tool
+  owns it.
+- Preserve every unmanaged directory, file, or symlink and report a conflict.
+- Do not replace a target because SQLite state alone says it was managed.
+- If the source is removed, remove a target only when ownership is still proven
+  on disk.
+- If a managed link is changed to point elsewhere, treat it as unmanaged and
+  preserve it.
+- Repair a broken managed link only when the expected source is valid again and
+  ownership remains provable.
+
+All operations must be idempotent. A second run against a correct target must
+make no change.
+
+### Safe Migration from Copied Skills
+
+Normal reconciliation never replaces a copied skill directory. It reports the
+copy as a conflict.
+
+Provide an explicit migration path for users who want to replace copied skills
+with managed links. A target is eligible only when:
+
+- The source and target are both safe skill directory trees.
+- Their relative entries and file contents match completely.
+- Their executable modes match.
+- No external synchronization record claims the target.
+
+Migration uses this sequence:
+
+1. Compare and validate the full source and target trees.
+2. Rename the target atomically to a temporary sibling path.
+3. Create the relative directory symlink.
+4. Verify that the link resolves to the expected source and exposes the same
+   tree.
+5. Remove the temporary copy only after verification succeeds.
+6. Restore the original target if link creation or verification fails.
+
+A difference, unsupported filesystem entry, ownership conflict, or failed
+verification leaves the original target unchanged.
+
+### External Synchronizers
+
+Some installations use a separate copy-based skill synchronizer, such as the
+OnurPi Agents synchronizer. The tool must detect known external synchronization
+state where it can do so safely.
+
+It must not automatically adopt, replace, clean, or purge a target claimed by
+another writer. `status` and `doctor` must explain the conflict and the
+single-writer rule. The user must stop the other writer for a target before an
+explicit migration can transfer ownership.
+
+This repository does not change OnurPi, Agents, Claude Code, Codex, Pi, or any
+other external synchronizer. A full cutover of an existing external copy-based
+installation requires a separate change in the repository that owns that
+synchronizer.
+
+### State and Hard Cutover
+
+Record one managed state entry for each skill target. The record must identify:
+
+- Global or project scope.
+- The repository and observed directory for project skills.
+- The canonical source root and source skill.
+- The Claude target root and target skill.
+- The resource type.
+- The expected relative link.
+- The last classification, result, and error.
+
+Extend the existing SQLite model in place. After the schema cutover, use one
+active reader and writer for each state contract. Do not keep parallel legacy
+and new state paths or indefinite dual behavior.
+
+Existing instruction-file records and behavior must remain valid after the
+cutover.
+
+### Lifecycle Commands and Reporting
+
+Extend normal product operations to include managed skill links:
+
+- `install` configures the existing hooks and service, initializes state, and
+  performs the same bounded initial observation.
+- `observe` reconciles global skills and project skill roots on the current
+  directory path.
+- The repair service revisits recorded project skill roots and the fixed global
+  root.
+- `watch` reacts to relevant source-root and target changes through the shared
+  reconciler.
+- `status` reports skill coverage, managed links, conflicts, invalid sources,
+  and external writers.
+- `doctor` checks platform support, parent paths, state health, link ownership,
+  and external-writer conflicts.
+- `clean` removes stale entries only after it proves target ownership.
+- `purge` removes only proven managed skill links and their managed Git exclude
+  entries.
+- `uninstall` leaves links by default and includes them when `--purge` is used.
+- Plain and JSON reporting include skill actions without changing the meaning
+  of existing instruction-file fields.
+
+No lifecycle command may delete a canonical skill source.
+
+### Git Behavior
+
+For project skills, add only individual managed target paths to the repository's
+private `.git/info/exclude` block. For example:
+
+```text
+/.claude/skills/deploy
+```
+
+Do not ignore `.claude/skills` as a whole. Do not hide unmanaged or tracked
+Claude skill entries. If a managed target becomes tracked or loses ownership,
+remove only its stale managed exclude entry when that operation is safe.
+
+Global skills are outside a repository and do not need Git exclude entries.
+
+### Platform Boundary
+
+Support and test directory-link behavior on Linux and macOS. Keep generated
+links relative on both platforms.
+
+Do not claim Windows support until a directory-link mechanism is implemented
+and verified for creation, discovery, ownership checks, migration, cleanup, and
+Claude Code loading. An unsupported platform must fail clearly without falling
+back to copied skill contents.
+
+### Implementation Sequence
+
+1. Add the skill-collection adapter and the skill source and target domain
+   types without changing instruction-file semantics.
+2. Add bounded global and hook-directed project discovery and source
+   validation.
+3. Add per-skill classification, relative directory-link creation, ownership
+   checks, repair, and removal.
+4. Cut the SQLite state and reporting model over to records that can represent
+   both instruction files and skill links.
+5. Connect skills to `observe`, the existing repair service, watch mode,
+   install, status, doctor, clean, purge, uninstall, and Git exclude handling.
+6. Add explicit copied-directory migration with complete comparison, atomic
+   replacement, verification, and rollback.
+7. Add external-writer detection and clear single-writer diagnostics.
+8. Update installer behavior and user documentation after the implementation
+   matches this contract.
+9. Run the complete verification plan and all existing instruction-file
+   regressions.
+
+### Verification Plan
+
+Automated tests must cover:
+
+- Project and global relative skill links.
+- Immediate visibility of changes to `SKILL.md`, scripts, references, assets,
+  and nested files without reconciliation or copying.
+- Valid and malformed source skills.
+- Unsafe source paths and filesystem entries.
+- Exact-link adoption.
+- Unmanaged directory, file, symlink, tracked-target, and parent-path
+  conflicts.
+- Idempotent no-change reconciliation.
+- Source deletion and rename.
+- Broken links and links changed to another target.
+- Repository moves with relative links.
+- Individual Git exclude creation, repair, and removal.
+- Complete and executable-mode-identical copied-directory migration.
+- Migration differences, external ownership, failed verification, rollback,
+  and original-data preservation.
+- Hook-targeted current-directory and ancestor reconciliation.
+- Fixed global-root reconciliation without a home scan.
+- Watch and repair-service reconciliation.
+- State hard cutover and existing instruction-record preservation.
+- `status`, `doctor`, `clean`, `purge`, `uninstall`, and installer behavior.
+- Plain and JSON reports.
+- All current `AGENTS.md` to `CLAUDE.md` unit, integration, migration, Git,
+  hook, service, installer, and regression tests.
+
+Acceptance also requires:
+
+- Rust formatting.
+- Clippy with warnings denied.
+- The complete Rust test suite.
+- Installer tests using temporary homes and state directories.
+- A real Claude Code check on each claimed operating system and surface when
+  that client is available. The result must confirm that Claude discovers a
+  linked skill directory. If the client has a symlink-discovery regression,
+  report the exact version and do not replace the link design with copies.
+- No writes to live `~/.agents`, `~/.claude`, service, or agent installations
+  during tests.
 
 ## Target User Experience
 
